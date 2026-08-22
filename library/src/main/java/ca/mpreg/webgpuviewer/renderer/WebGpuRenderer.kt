@@ -2,6 +2,7 @@ package ca.mpreg.webgpuviewer.renderer
 
 import android.util.Log
 import android.view.Surface
+import androidx.webgpu.BackendType
 import androidx.webgpu.DeviceLostCallback
 import androidx.webgpu.DeviceLostException
 import androidx.webgpu.FeatureLevel
@@ -38,6 +39,8 @@ import java.util.concurrent.Executors
 
 class WebGpuRenderer {
     companion object {
+        private const val TAG = "WebGpuRenderer"
+
         var instance: GPUInstance
         var adapter: GPUAdapter
         var device: GPUDevice
@@ -97,14 +100,46 @@ class WebGpuRenderer {
             recentFrameIndex = (recentFrameIndex + 1) % 60
         }
 
+        private fun adapterDescription(a: GPUAdapter): String = try {
+            val i = a.getInfo()
+            "vendor=${i.vendor} arch=${i.architecture} device=${i.device} " +
+                "backend=${BackendType.toString(i.backendType)}"
+        } catch (e: Exception) {
+            "unknown"
+        }
+
         init {
             runBlocking {
                 initLibrary()
 
                 instance = createInstance(GPUInstanceDescriptor())
 
-                adapter =
-                    instance.requestAdapter(GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility))
+                // Experiment A (fix/blank/old-driver): old Adreno Vulkan drivers present
+                // black frames without raising any validation error; force the GLES backend.
+                // If GLES can't produce an adapter on this device, fall back to Dawn's own
+                // selection rather than crashing.
+                Log.i(TAG, "Requesting adapter with backendType=OpenGLES")
+                val requested: GPUAdapter? = try {
+                    instance.requestAdapter(
+                        GPURequestAdapterOptions(
+                            featureLevel = FeatureLevel.Compatibility,
+                            backendType = BackendType.OpenGLES,
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "requestAdapter(OpenGLES) failed", e)
+                    null
+                }
+
+                if (requested != null) {
+                    Log.i(TAG, "Using OpenGLES adapter: ${adapterDescription(requested)}")
+                    adapter = requested
+                } else {
+                    Log.w(TAG, "No OpenGLES adapter available; falling back to default backend")
+                    adapter = instance.requestAdapter(
+                        GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility)
+                    )
+                }
 
                 val requiredFeatures =
                     if (adapter.hasFeature(FeatureName.TimestampQuery)) {
