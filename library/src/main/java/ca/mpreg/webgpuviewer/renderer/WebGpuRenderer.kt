@@ -351,6 +351,11 @@ internal object GpuContext {
         }
     }
 
+    /** GLES-first worked around silent black frames on old Adreno Vulkan drivers, but the
+     *  GL/EGL backend itself fails with eglMakeCurrent(EGL_BAD_ACCESS) on those same drivers
+     *  (exp-d5). Flip to false to test whether the newer pinned Dawn fixes the Vulkan path. */
+    private const val PREFER_GLES = false
+
     private suspend fun doSetup() {
         Log.i(TAG, "initLibrary() on ${Thread.currentThread().name}")
         initLibrary()
@@ -360,16 +365,20 @@ internal object GpuContext {
         // Old Adreno Vulkan drivers present black frames without raising any validation
         // error; try the GLES backend first. If GLES can't produce an adapter on this
         // device, fall back to Dawn's own selection rather than crashing.
-        Log.i(TAG, "Requesting adapter with backendType=OpenGLES")
-        val requested: GPUAdapter? = try {
-            instance.requestAdapter(
-                GPURequestAdapterOptions(
-                    featureLevel = FeatureLevel.Compatibility,
-                    backendType = BackendType.OpenGLES,
+        Log.i(TAG, "Requesting adapter (preferGLES=$PREFER_GLES)")
+        val requested: GPUAdapter? = if (PREFER_GLES) {
+            try {
+                instance.requestAdapter(
+                    GPURequestAdapterOptions(
+                        featureLevel = FeatureLevel.Compatibility,
+                        backendType = BackendType.OpenGLES,
+                    )
                 )
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "requestAdapter(OpenGLES) failed", e)
+            } catch (e: Exception) {
+                Log.w(TAG, "requestAdapter(OpenGLES) failed", e)
+                null
+            }
+        } else {
             null
         }
 
