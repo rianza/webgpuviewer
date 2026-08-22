@@ -42,9 +42,9 @@ class WebGpuRenderer {
     companion object {
         private const val TAG = "WebGpuRenderer"
 
-        var instance: GPUInstance
-        var adapter: GPUAdapter
-        var device: GPUDevice
+        lateinit var instance: GPUInstance
+        lateinit var adapter: GPUAdapter
+        lateinit var device: GPUDevice
         private val mutex = Mutex()
 
         var offsetX: Float = 0f
@@ -116,7 +116,9 @@ class WebGpuRenderer {
             // eglMakeCurrent, so run the whole setup on the render thread and block until
             // it completes.
             if (Thread.currentThread().name == "WebGPU-Render-Thread") {
-                setupDevice()
+                runBlocking {
+                    setupDevice()
+                }
             } else {
                 runBlocking(dispatcher) {
                     setupDevice()
@@ -124,7 +126,7 @@ class WebGpuRenderer {
             }
         }
 
-        private fun setupDevice() {
+        private suspend fun setupDevice() {
             initLibrary()
 
             instance = createInstance(GPUInstanceDescriptor())
