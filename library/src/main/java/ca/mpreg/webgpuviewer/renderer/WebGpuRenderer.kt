@@ -30,8 +30,11 @@ import androidx.webgpu.helper.initLibrary
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer.Companion.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -109,7 +112,7 @@ class WebGpuRenderer {
             // touches this still-initializing companion deadlocks against the JVM class-init
             // lock (exp-d4: one log line, then silence). Device setup runs in the background;
             // consumers await GpuContext.ready.
-            GpuContext.ensureStarted(renderExecutor)
+            GpuContext.ensureStarted(dispatcher)
             Log.i(TAG, "Companion init complete")
         }
 
@@ -329,27 +332,23 @@ internal object GpuContext {
     @Volatile
     private var started = false
 
-    fun ensureStarted(executor: java.util.concurrent.Executor) {
+    fun ensureStarted(dispatcher: CoroutineDispatcher) {
         if (started) return
         synchronized(this) {
             if (started) return
             started = true
-            executor.execute {
-                runBlocking {
-                    setup()
+            // Fire-and-forget on the render thread. SupervisorJob isolates a setup failure;
+            // awaiters observe the outcome via [ready].
+            CoroutineScope(SupervisorJob() + dispatcher).launch {
+                try {
+                    doSetup()
+                    ready.complete(Unit)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Device setup FAILED", t)
+                    ready.completeExceptionally(t)
                 }
             }
         }
-    }
-
-    private suspend fun setup() {
-        try {
-            doSetup()
-        } catch (t: Throwable) {
-            ready.completeExceptionally(t)
-            throw t
-        }
-        ready.complete(Unit)
     }
 
     private suspend fun doSetup() {
