@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - fix/blank/old-driver
     tags:
       - "*"
     paths-ignore:
@@ -18,11 +19,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    environment: deploy
-
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout Repository
@@ -37,7 +35,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Publish Artifact
+      - name: Build
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: ./gradlew :library:assembleRelease :sample:assembleRelease
+
+      - name: Publish to Maven Central
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: ./gradlew publishToMavenCentral
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}

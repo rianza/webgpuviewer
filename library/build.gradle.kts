@@ -62,13 +62,13 @@ dependencies {
 
 afterEvaluate {
     mavenPublishing {
-        coordinates("ca.mpreg", "webgpuviewer", tag)
+        coordinates("io.github.rianza", "webgpuviewer", tag)
 
         pom {
             name.set("webgpuviewer")
-            description.set("webgpuviewer")
+            description.set("WebGPU-based image viewer for Android (Adreno GLES fix fork)")
             inceptionYear.set("2026")
-            url.set("https://github.com/mpreg-ca/webgpuviewer")
+            url.set("https://github.com/rianza/webgpuviewer")
             licenses {
                 license {
                     name.set("MIT License")
@@ -78,15 +78,15 @@ afterEvaluate {
             }
             developers {
                 developer {
-                    id.set("wwww-wwww")
-                    name.set("w")
-                    url.set("https://github.com/wwww-wwww/")
+                    id.set("rianza")
+                    name.set("rianza")
+                    url.set("https://github.com/rianza/")
                 }
             }
             scm {
-                url.set("https://github.com/mpreg-ca/webgpuviewer/")
-                connection.set("scm:git:git://github.com/mpreg-ca/webgpuviewer.git")
-                developerConnection.set("scm:git:ssh://git@github.com/mpreg-ca/webgpuviewer.git")
+                url.set("https://github.com/rianza/webgpuviewer/")
+                connection.set("scm:git:git://github.com/rianza/webgpuviewer.git")
+                developerConnection.set("scm:git:ssh://github.com/rianza/webgpuviewer.git")
             }
         }
 
