@@ -110,23 +110,33 @@ class WebGpuRenderer {
         }
 
         init {
-            // Dawn's OpenGL backend binds its EGL context to the thread that creates the
-            // device. Creating it on an arbitrary class-loading thread (usually main) makes
-            // every later call from WebGPU-Render-Thread fail with EGL_BAD_ACCESS in
-            // eglMakeCurrent, so run the whole setup on the render thread and block until
-            // it completes.
-            if (Thread.currentThread().name == "WebGPU-Render-Thread") {
-                runBlocking {
-                    setupDevice()
+            Log.i(TAG, "Companion init starting on ${Thread.currentThread().name}")
+            try {
+                // Dawn's OpenGL backend binds its EGL context to the thread that creates the
+                // device. Creating it on an arbitrary class-loading thread (usually main) makes
+                // every later call from WebGPU-Render-Thread fail with EGL_BAD_ACCESS in
+                // eglMakeCurrent, so run the whole setup on the render thread and block until
+                // it completes.
+                if (Thread.currentThread().name == "WebGPU-Render-Thread") {
+                    runBlocking {
+                        setupDevice()
+                    }
+                } else {
+                    runBlocking(dispatcher) {
+                        setupDevice()
+                    }
                 }
-            } else {
-                runBlocking(dispatcher) {
-                    setupDevice()
-                }
+                Log.i(TAG, "Companion init complete")
+            } catch (t: Throwable) {
+                // Uncaught, this surfaces as ExceptionInInitializerError on every later class
+                // touch with no useful trace; log the real cause here.
+                Log.e(TAG, "Companion init FAILED", t)
+                throw t
             }
         }
 
         private suspend fun setupDevice() {
+            Log.i(TAG, "initLibrary() on ${Thread.currentThread().name}")
             initLibrary()
 
             instance = createInstance(GPUInstanceDescriptor())
@@ -155,6 +165,7 @@ class WebGpuRenderer {
                 adapter = instance.requestAdapter(
                     GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility)
                 )
+                Log.i(TAG, "Fallback adapter: ${adapterDescription(adapter)}")
             }
 
             val requiredFeatures =
@@ -164,6 +175,7 @@ class WebGpuRenderer {
                     intArrayOf()
                 }
 
+            Log.i(TAG, "Requesting device")
             device = adapter.requestDevice(
                 GPUDeviceDescriptor(
                     deviceLostCallback = defaultDeviceLostCallback,
@@ -173,6 +185,7 @@ class WebGpuRenderer {
                     requiredFeatures = requiredFeatures,
                 )
             )
+            Log.i(TAG, "Device ready")
         }
 
         @JvmStatic
