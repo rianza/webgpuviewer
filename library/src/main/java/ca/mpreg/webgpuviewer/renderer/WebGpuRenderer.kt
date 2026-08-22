@@ -3,6 +3,7 @@ package ca.mpreg.webgpuviewer.renderer
 import android.util.Log
 import android.view.Surface
 import androidx.webgpu.BackendType
+import androidx.webgpu.CompositeAlphaMode
 import androidx.webgpu.DeviceLostCallback
 import androidx.webgpu.DeviceLostException
 import androidx.webgpu.FeatureLevel
@@ -215,18 +216,28 @@ class WebGpuRenderer {
                         )
                     )
                 ).apply {
-                    configure(
-                        GPUSurfaceConfiguration(
-                            device,
-                            width,
-                            height,
-                            // Experiment B (fix/blank/old-driver): ANativeWindow is natively
-                            // BGRA on many drivers; some old Adreno Vulkan drivers mishandle
-                            // RGBA8 swapchains.
-                            TextureFormat.BGRA8Unorm,
-                            TextureUsage.RenderAttachment
+                    try {
+                        configure(
+                            GPUSurfaceConfiguration(
+                                device,
+                                width,
+                                height,
+                                // Adreno 610's Vulkan swapchain only offers RGBA8Unorm - a
+                                // hardcoded BGRA8Unorm is rejected by Surface.Configure there
+                                // (ValidationException, exp-b1).
+                                TextureFormat.RGBA8Unorm,
+                                TextureUsage.RenderAttachment,
+                                // Experiment C (fix/blank/old-driver): the viewer clears to
+                                // transparent black; if an old driver composites the swapchain
+                                // layer with alpha, the whole frame can render invisible.
+                                alphaMode = CompositeAlphaMode.Opaque,
+                            )
                         )
-                    )
+                    } catch (e: Exception) {
+                        // A validation failure here used to escape as a crash via the uncaptured
+                        // error callback; log it and keep going instead.
+                        Log.e(TAG, "Surface configure failed", e)
+                    }
                 }
             }
         }
