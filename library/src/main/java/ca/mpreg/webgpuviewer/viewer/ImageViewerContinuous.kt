@@ -532,7 +532,7 @@ fun ImageViewerContinuous(
                         }
                     }
                 }
-            }, isOpaque = false
+            }, isOpaque = true
     ) {
         onSurface { surface, width, height ->
             try {

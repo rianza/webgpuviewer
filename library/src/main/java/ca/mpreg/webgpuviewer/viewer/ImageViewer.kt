@@ -467,7 +467,7 @@ fun ImageViewer(
                         }
                     }
                 }
-            }, isOpaque = false
+            }, isOpaque = true
     ) {
         onSurface { surface, width, height ->
             try {
