@@ -244,7 +244,10 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
                         view = texture.createView(),
                         loadOp = LoadOp.Clear,
                         storeOp = StoreOp.Store,
-                        clearValue = GPUColor(0.0, 0.0, 0.0, 0.0)
+                        // TEMPORARY diagnostic (fix/blank/old-driver): opaque red proves whether
+                        // presented frames reach the screen at all. Revert to GPUColor(0,0,0,0)
+                        // once the blank-screen root cause is confirmed.
+                        clearValue = GPUColor(1.0, 0.0, 0.0, 1.0)
                     )
                 ),
                 // Cleared fresh every frame so TileRenderer's blit can mark which pixels it just
