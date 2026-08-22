@@ -220,7 +220,10 @@ class WebGpuRenderer {
                             device,
                             width,
                             height,
-                            TextureFormat.RGBA8Unorm,
+                            // Experiment B (fix/blank/old-driver): ANativeWindow is natively
+                            // BGRA on many drivers; some old Adreno Vulkan drivers mishandle
+                            // RGBA8 swapchains.
+                            TextureFormat.BGRA8Unorm,
                             TextureUsage.RenderAttachment
                         )
                     )
