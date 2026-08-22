@@ -41,7 +41,12 @@ jobs:
 
       - name: Publish to Maven Central
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        run: ./gradlew publishToMavenCentral
+        run: |
+          if [ -z "$ORG_GRADLE_PROJECT_mavenCentralUsername" ]; then
+            echo "Maven Central secrets not configured; skipping publish"
+            exit 0
+          fi
+          ./gradlew publishToMavenCentral
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_REF_TYPE: ${{ github.ref_type }}
