@@ -29,6 +29,7 @@ import androidx.webgpu.helper.Util.windowFromSurface
 import androidx.webgpu.helper.initLibrary
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer.Companion.withContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
@@ -42,17 +43,18 @@ class WebGpuRenderer {
     companion object {
         private const val TAG = "WebGpuRenderer"
 
-        lateinit var instance: GPUInstance
-        lateinit var adapter: GPUAdapter
-        lateinit var device: GPUDevice
+        val instance get() = GpuContext.instance
+        val adapter get() = GpuContext.adapter
+        val device get() = GpuContext.device
         private val mutex = Mutex()
 
         var offsetX: Float = 0f
         var offsetY: Float = 0f
 
-        val dispatcher = Executors.newSingleThreadExecutor { runnable ->
+        private val renderExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "WebGPU-Render-Thread")
-        }.asCoroutineDispatcher()
+        }
+        val dispatcher = renderExecutor.asCoroutineDispatcher()
 
         // Frame time profiling
         var profilingEnabled = false
@@ -101,96 +103,20 @@ class WebGpuRenderer {
             recentFrameIndex = (recentFrameIndex + 1) % 60
         }
 
-        private fun adapterDescription(a: GPUAdapter): String = try {
-            val i = a.getInfo()
-            "vendor=${i.vendor} arch=${i.architecture} device=${i.device} " +
-                "backend=${BackendType.toString(i.backendType)}"
-        } catch (e: Exception) {
-            "unknown"
-        }
-
         init {
             Log.i(TAG, "Companion init starting on ${Thread.currentThread().name}")
-            try {
-                // Dawn's OpenGL backend binds its EGL context to the thread that creates the
-                // device. Creating it on an arbitrary class-loading thread (usually main) makes
-                // every later call from WebGPU-Render-Thread fail with EGL_BAD_ACCESS in
-                // eglMakeCurrent, so run the whole setup on the render thread and block until
-                // it completes.
-                if (Thread.currentThread().name == "WebGPU-Render-Thread") {
-                    runBlocking {
-                        setupDevice()
-                    }
-                } else {
-                    runBlocking(dispatcher) {
-                        setupDevice()
-                    }
-                }
-                Log.i(TAG, "Companion init complete")
-            } catch (t: Throwable) {
-                // Uncaught, this surfaces as ExceptionInInitializerError on every later class
-                // touch with no useful trace; log the real cause here.
-                Log.e(TAG, "Companion init FAILED", t)
-                throw t
-            }
-        }
-
-        private suspend fun setupDevice() {
-            Log.i(TAG, "initLibrary() on ${Thread.currentThread().name}")
-            initLibrary()
-
-            instance = createInstance(GPUInstanceDescriptor())
-
-            // Old Adreno Vulkan drivers present black frames without raising any validation
-            // error; try the GLES backend first. If GLES can't produce an adapter on this
-            // device, fall back to Dawn's own selection rather than crashing.
-            Log.i(TAG, "Requesting adapter with backendType=OpenGLES")
-            val requested: GPUAdapter? = try {
-                instance.requestAdapter(
-                    GPURequestAdapterOptions(
-                        featureLevel = FeatureLevel.Compatibility,
-                        backendType = BackendType.OpenGLES,
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "requestAdapter(OpenGLES) failed", e)
-                null
-            }
-
-            if (requested != null) {
-                Log.i(TAG, "Using OpenGLES adapter: ${adapterDescription(requested)}")
-                adapter = requested
-            } else {
-                Log.w(TAG, "No OpenGLES adapter available; falling back to default backend")
-                adapter = instance.requestAdapter(
-                    GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility)
-                )
-                Log.i(TAG, "Fallback adapter: ${adapterDescription(adapter)}")
-            }
-
-            val requiredFeatures =
-                if (adapter.hasFeature(FeatureName.TimestampQuery)) {
-                    intArrayOf(FeatureName.TimestampQuery)
-                } else {
-                    intArrayOf()
-                }
-
-            Log.i(TAG, "Requesting device")
-            device = adapter.requestDevice(
-                GPUDeviceDescriptor(
-                    deviceLostCallback = defaultDeviceLostCallback,
-                    deviceLostCallbackExecutor = Executor(Runnable::run),
-                    uncapturedErrorCallback = defaultUncapturedErrorCallback,
-                    uncapturedErrorCallbackExecutor = Executor(Runnable::run),
-                    requiredFeatures = requiredFeatures,
-                )
-            )
-            Log.i(TAG, "Device ready")
+            // Non-blocking on purpose: blocking here on the render thread while its task
+            // touches this still-initializing companion deadlocks against the JVM class-init
+            // lock (exp-d4: one log line, then silence). Device setup runs in the background;
+            // consumers await GpuContext.ready.
+            GpuContext.ensureStarted(renderExecutor)
+            Log.i(TAG, "Companion init complete")
         }
 
         @JvmStatic
         suspend fun <R> withContext(block: suspend CoroutineScope.(GPUDevice) -> R): R {
             return withContext(dispatcher) {
+                GpuContext.ready.await()
                 mutex.withLock {
                     block(this, device)
                 }
@@ -212,6 +138,7 @@ class WebGpuRenderer {
         @JvmStatic
         suspend fun <R> onDispatcher(block: suspend CoroutineScope.(GPUDevice) -> R): R {
             return withContext(dispatcher) {
+                GpuContext.ready.await()
                 block(this, device)
             }
         }
@@ -234,6 +161,14 @@ class WebGpuRenderer {
         this.width = width
         this.height = height
         this.surfaceConfigured = false
+
+        // Device setup runs asynchronously on first class use; block until it finished
+        // before creating or configuring any surface.
+        if (Thread.currentThread().name == "WebGPU-Render-Thread") {
+            runBlocking { GpuContext.ready.await() }
+        } else {
+            runBlocking(dispatcher) { GpuContext.ready.await() }
+        }
 
         // Check if already on dispatcher thread to avoid deadlock
         val isOnDispatcherThread = Thread.currentThread().name == "WebGPU-Render-Thread"
@@ -366,3 +301,115 @@ private val defaultDeviceLostCallback
             throw DeviceLostException(device, reason, message)
         }
     }
+
+/**
+ * Holds the WebGPU instance/adapter/device.
+ *
+ * Kept separate from [WebGpuRenderer]'s companion on purpose. Dawn's OpenGL backend binds
+ * its EGL context to the thread that creates the device, so setup must run on
+ * "WebGPU-Render-Thread"; but a companion init block that blocks waiting for a task which
+ * itself touches the still-initializing companion deadlocks on the JVM class-init lock
+ * (exp-d4: "Companion init starting", then silence until the system kills the reader).
+ * This object initializes under its own lock and never references [WebGpuRenderer] while
+ * doing so.
+ */
+internal object GpuContext {
+    private const val TAG = "WebGpuRenderer"
+
+    lateinit var instance: GPUInstance
+        private set
+    lateinit var adapter: GPUAdapter
+        private set
+    lateinit var device: GPUDevice
+        private set
+
+    /** Completes once instance/adapter/device are usable; completes exceptionally if setup threw. */
+    val ready = CompletableDeferred<Unit>()
+
+    @Volatile
+    private var started = false
+
+    fun ensureStarted(executor: java.util.concurrent.Executor) {
+        if (started) return
+        synchronized(this) {
+            if (started) return
+            started = true
+            executor.execute {
+                runBlocking {
+                    setup()
+                }
+            }
+        }
+    }
+
+    private suspend fun setup() {
+        try {
+            doSetup()
+        } catch (t: Throwable) {
+            ready.completeExceptionally(t)
+            throw t
+        }
+        ready.complete(Unit)
+    }
+
+    private suspend fun doSetup() {
+        Log.i(TAG, "initLibrary() on ${Thread.currentThread().name}")
+        initLibrary()
+
+        instance = createInstance(GPUInstanceDescriptor())
+
+        // Old Adreno Vulkan drivers present black frames without raising any validation
+        // error; try the GLES backend first. If GLES can't produce an adapter on this
+        // device, fall back to Dawn's own selection rather than crashing.
+        Log.i(TAG, "Requesting adapter with backendType=OpenGLES")
+        val requested: GPUAdapter? = try {
+            instance.requestAdapter(
+                GPURequestAdapterOptions(
+                    featureLevel = FeatureLevel.Compatibility,
+                    backendType = BackendType.OpenGLES,
+                )
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "requestAdapter(OpenGLES) failed", e)
+            null
+        }
+
+        if (requested != null) {
+            Log.i(TAG, "Using OpenGLES adapter: ${describe(requested)}")
+            adapter = requested
+        } else {
+            Log.w(TAG, "No OpenGLES adapter available; falling back to default backend")
+            adapter = instance.requestAdapter(
+                GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility)
+            )
+            Log.i(TAG, "Fallback adapter: ${describe(adapter)}")
+        }
+
+        val requiredFeatures =
+            if (adapter.hasFeature(FeatureName.TimestampQuery)) {
+                intArrayOf(FeatureName.TimestampQuery)
+            } else {
+                intArrayOf()
+            }
+
+        Log.i(TAG, "Requesting device")
+        device = adapter.requestDevice(
+            GPUDeviceDescriptor(
+                deviceLostCallback = defaultDeviceLostCallback,
+                deviceLostCallbackExecutor = Executor(Runnable::run),
+                uncapturedErrorCallback = defaultUncapturedErrorCallback,
+                uncapturedErrorCallbackExecutor = Executor(Runnable::run),
+                requiredFeatures = requiredFeatures,
+            )
+        )
+        Log.i(TAG, "Device ready")
+    }
+
+    private fun describe(a: GPUAdapter): String = try {
+        val i = a.getInfo()
+        "vendor=${i.vendor} arch=${i.architecture} device=${i.device} " +
+            "backend=${BackendType.toString(i.backendType)}"
+    } catch (e: Exception) {
+        "unknown"
+    }
+}
