@@ -198,11 +198,15 @@ class WebGpuRenderer {
 
     private var scope: CoroutineScope? = null
 
+    @Volatile
+    private var surfaceConfigured = false
+
     @Synchronized
     fun init(scope: CoroutineScope, surface: Surface, width: Int, height: Int) {
         this.scope = scope
         this.width = width
         this.height = height
+        this.surfaceConfigured = false
 
         // Check if already on dispatcher thread to avoid deadlock
         val isOnDispatcherThread = Thread.currentThread().name == "WebGPU-Render-Thread"
@@ -216,27 +220,34 @@ class WebGpuRenderer {
                         )
                     )
                 ).apply {
-                    try {
-                        configure(
-                            GPUSurfaceConfiguration(
-                                device,
-                                width,
-                                height,
-                                // Adreno 610's Vulkan swapchain only offers RGBA8Unorm - a
-                                // hardcoded BGRA8Unorm is rejected by Surface.Configure there
-                                // (ValidationException, exp-b1).
-                                TextureFormat.RGBA8Unorm,
-                                TextureUsage.RenderAttachment,
-                                // Experiment C (fix/blank/old-driver): the viewer clears to
-                                // transparent black; if an old driver composites the swapchain
-                                // layer with alpha, the whole frame can render invisible.
-                                alphaMode = CompositeAlphaMode.Opaque,
+                    // Old Vulkan drivers accept only a subset of surface configurations:
+                    // Adreno 610 (driver 12/2020) rejects both BGRA8Unorm and
+                    // CompositeAlphaMode.Opaque with ValidationException on Configure.
+                    // Try candidates in order until one is accepted.
+                    val alphaCandidates = intArrayOf(
+                        CompositeAlphaMode.Opaque,
+                        CompositeAlphaMode.Premultiplied,
+                        CompositeAlphaMode.Auto,
+                        CompositeAlphaMode.Inherit,
+                    )
+                    for (alpha in alphaCandidates) {
+                        try {
+                            configure(
+                                GPUSurfaceConfiguration(
+                                    device,
+                                    width,
+                                    height,
+                                    TextureFormat.RGBA8Unorm,
+                                    TextureUsage.RenderAttachment,
+                                    alphaMode = alpha,
+                                )
                             )
-                        )
-                    } catch (e: Exception) {
-                        // A validation failure here used to escape as a crash via the uncaptured
-                        // error callback; log it and keep going instead.
-                        Log.e(TAG, "Surface configure failed", e)
+                            surfaceConfigured = true
+                            Log.i(TAG, "Surface configured, alphaMode=$alpha")
+                            break
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Surface configure rejected alphaMode=$alpha", e)
+                        }
                     }
                 }
             }
@@ -255,6 +266,9 @@ class WebGpuRenderer {
         val startTime = if (profilingEnabled) System.nanoTime() else 0L
 
         mutex.withLock {
+            // getCurrentTexture() on an unconfigured surface segfaults natively (uncatchable);
+            // skip rendering entirely instead.
+            if (!surfaceConfigured) return
             val surface = surface ?: return
 
             val texture = try {
