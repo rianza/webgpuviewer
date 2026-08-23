@@ -99,12 +99,25 @@ class WebGpuRenderer {
 
         init {
             runBlocking {
+                Log.i("WebGpuRenderer", "Initializing Dawn library")
                 initLibrary()
 
                 instance = createInstance(GPUInstanceDescriptor())
+                Log.i("WebGpuRenderer", "GPUInstance created")
 
                 adapter =
                     instance.requestAdapter(GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility))
+
+                if (adapter == null) {
+                    val message = "requestAdapter returned null - no compatible GPU backend on this device"
+                    Log.e("WebGpuRenderer", message)
+                    error(message)
+                }
+                Log.i(
+                    "WebGpuRenderer",
+                    "Adapter acquired: featureLevel=Compatibility " +
+                        "timestampQuery=${adapter.hasFeature(FeatureName.TimestampQuery)}"
+                )
 
                 val requiredFeatures =
                     if (adapter.hasFeature(FeatureName.TimestampQuery)) {
@@ -122,6 +135,7 @@ class WebGpuRenderer {
                         requiredFeatures = requiredFeatures,
                     )
                 )
+                Log.i("WebGpuRenderer", "GPUDevice created; rendering runs on WebGPU-Render-Thread")
             }
         }
 
@@ -157,6 +171,14 @@ class WebGpuRenderer {
     @Volatile
     private var surface: GPUSurface? = null
 
+    // One-shot diagnostics: reset on every surface init so each reader session reports
+    // its own "configured" and "first frame presented" markers.
+    @Volatile
+    private var loggedMissingSurface = false
+
+    @Volatile
+    private var firstFrameLogged = false
+
     var width: Int = 0
     var height: Int = 0
 
@@ -172,6 +194,11 @@ class WebGpuRenderer {
         val isOnDispatcherThread = Thread.currentThread().name == "WebGPU-Render-Thread"
 
         val initSurface = {
+            Log.i(
+                "WebGpuRenderer",
+                "Surface init ${width}x${height}: create GPUSurface + configure" +
+                    "(RGBA8Unorm, RenderAttachment)"
+            )
             this@WebGpuRenderer.surface = surface.let {
                 instance.createSurface(
                     GPUSurfaceDescriptor(
@@ -191,6 +218,9 @@ class WebGpuRenderer {
                     )
                 }
             }
+            loggedMissingSurface = false
+            firstFrameLogged = false
+            Log.i("WebGpuRenderer", "Surface configured OK (${width}x${height})")
         }
 
         if (isOnDispatcherThread) {
@@ -206,7 +236,14 @@ class WebGpuRenderer {
         val startTime = if (profilingEnabled) System.nanoTime() else 0L
 
         mutex.withLock {
-            val surface = surface ?: return
+            val surface = surface
+            if (surface == null) {
+                if (!loggedMissingSurface) {
+                    loggedMissingSurface = true
+                    Log.w("WebGpuRenderer", "render() skipped: no surface configured yet")
+                }
+                return
+            }
 
             val texture = try {
                 surface.getCurrentTexture().texture
@@ -220,6 +257,10 @@ class WebGpuRenderer {
                 fn(encoder, texture)
                 device.queue.submit(arrayOf(encoder.finish()))
                 surface.present()
+                if (!firstFrameLogged) {
+                    firstFrameLogged = true
+                    Log.i("WebGpuRenderer", "First frame presented (${width}x${height})")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -245,6 +286,7 @@ class WebGpuRenderer {
 
         val doCleanup: suspend () -> Unit = {
             mutex.withLock {
+                Log.i("WebGpuRenderer", "Surface released")
                 surface?.close()
                 surface = null
             }
@@ -266,6 +308,7 @@ class WebGpuRenderer {
 private val defaultUncapturedErrorCallback
     get(): UncapturedErrorCallback {
         return UncapturedErrorCallback { _, type, message ->
+            Log.e("WebGpuRenderer", "Uncaptured GPU error [$type]: $message")
             throw WebGpuRuntimeException.create(type, message)
         }
     }
@@ -273,6 +316,7 @@ private val defaultUncapturedErrorCallback
 private val defaultDeviceLostCallback
     get(): DeviceLostCallback {
         return DeviceLostCallback { device, reason, message ->
+            Log.e("WebGpuRenderer", "GPU device lost: reason=$reason message=$message")
             throw DeviceLostException(device, reason, message)
         }
     }
