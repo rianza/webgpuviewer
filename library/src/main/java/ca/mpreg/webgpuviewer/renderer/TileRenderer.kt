@@ -868,10 +868,16 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             }
         }
 
-        if (st.scale != pageScale || st.centerYOffset != centerYOffset) {
+        if (st.scale != pageScale) {
             // Dawn keeps a destroyed texture alive until its command buffers retire, so
-            // destroying now is safe. A changed centerYOffset at fixed scale means a placeholder
-            // corrected its guessed height - invalidate the same way a scale change does.
+            // destroying now is safe. Only true scale changes regenerate tiles: a tile's
+            // texture is a crop of the page at this scale and knows nothing about where
+            // the camera sits - placement is applied per frame via the snap/clip uniforms.
+            // centerYOffset therefore must not be part of the cache identity: it moves
+            // with every scroll frame (docTop is anchored to the camera), and comparing
+            // it here used to wipe and rebuild the entire visible page's grid on each
+            // gesture - the lag/freeze on scrolling, the sequential catch-up after jumps,
+            // and the sharp-blurry-sharp cycling all came from this.
             st.tiles.values.forEach { it.destroy() }
             st.tiles.clear()
             st.pending.clear()
@@ -884,7 +890,8 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             st.stable = !suppressGeneration
         }
         // Recomputed every call regardless of whether it actually changed - see the field's own
-        // doc for why that's safe. generate() has no other way to reach this value.
+        // doc for why that's safe. Placement-only: consumed by gridPlacement this frame, never
+        // by generateTile.
         st.centerYOffset = centerYOffset
 
         val gp = gridPlacement(page, dst, anchorX, anchorY, centerYOffset, pageScale)
