@@ -178,43 +178,46 @@ class WebGpuRenderer {
 
         val initSurface = {
             this@WebGpuRenderer.surface = surface.let {
-                instance.createSurface(
-                    GPUSurfaceDescriptor(
-                        surfaceSourceAndroidNativeWindow = GPUSurfaceSourceAndroidNativeWindow(
-                            windowFromSurface(it)
+                // Old Vulkan drivers accept only a subset of surface configurations:
+                // Adreno 610 (driver 12/2020) rejects CompositeAlphaMode.Opaque with
+                // ValidationException on Configure, and re-configuring that same surface
+                // afterwards segfaults natively inside Dawn's Vulkan backend. So Auto -
+                // which lets Dawn pick any supported mode itself - goes first, and every
+                // further candidate gets a freshly created surface object.
+                val window = windowFromSurface(it)
+                val alphaCandidates = intArrayOf(
+                    CompositeAlphaMode.Auto,
+                    CompositeAlphaMode.Premultiplied,
+                    CompositeAlphaMode.Opaque,
+                )
+                var configured: GPUSurface? = null
+                for (alpha in alphaCandidates) {
+                    val candidate = instance.createSurface(
+                        GPUSurfaceDescriptor(
+                            surfaceSourceAndroidNativeWindow =
+                                GPUSurfaceSourceAndroidNativeWindow(window)
                         )
                     )
-                ).apply {
-                    // Old Vulkan drivers accept only a subset of surface configurations:
-                    // Adreno 610 (driver 12/2020) rejects both BGRA8Unorm and
-                    // CompositeAlphaMode.Opaque with ValidationException on Configure.
-                    // Try candidates in order until one is accepted.
-                    val alphaCandidates = intArrayOf(
-                        CompositeAlphaMode.Opaque,
-                        CompositeAlphaMode.Premultiplied,
-                        CompositeAlphaMode.Auto,
-                        CompositeAlphaMode.Inherit,
-                    )
-                    for (alpha in alphaCandidates) {
-                        try {
-                            configure(
-                                GPUSurfaceConfiguration(
-                                    device,
-                                    width,
-                                    height,
-                                    TextureFormat.RGBA8Unorm,
-                                    TextureUsage.RenderAttachment,
-                                    alphaMode = alpha,
-                                )
+                    try {
+                        candidate.configure(
+                            GPUSurfaceConfiguration(
+                                device,
+                                width,
+                                height,
+                                TextureFormat.RGBA8Unorm,
+                                TextureUsage.RenderAttachment,
+                                alphaMode = alpha,
                             )
-                            surfaceConfigured = true
-                            Log.i(TAG, "Surface configured, alphaMode=$alpha")
-                            break
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Surface configure rejected alphaMode=$alpha", e)
-                        }
+                        )
+                        configured = candidate
+                        surfaceConfigured = true
+                        Log.i(TAG, "Surface configured, alphaMode=$alpha")
+                        break
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Surface configure rejected alphaMode=$alpha", e)
                     }
                 }
+                configured
             }
         }
 
