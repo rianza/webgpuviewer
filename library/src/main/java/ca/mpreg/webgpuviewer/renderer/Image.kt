@@ -168,7 +168,7 @@ class Image private constructor(
 
     private var _buffer: GPUBuffer? = WebGpuRenderer.device.createBuffer(
         GPUBufferDescriptor(size = BUFFER_SIZE, usage = BufferUsage.CopyDst or BufferUsage.Uniform)
-    )
+    ).also { Log.d("Renderer", "Image uniform buffer created (${BUFFER_SIZE} bytes)") }
 
     val buffer: GPUBuffer
         get() = _buffer ?: error("Image buffer accessed after cleanup")
@@ -179,6 +179,7 @@ class Image private constructor(
         mipmaps.forEach { it.cleanup() }
         mipmaps.clear()
         _buffer?.destroy()
+        Log.d("Renderer", "Image uniform buffer destroyed")
         _buffer = null
     }
 

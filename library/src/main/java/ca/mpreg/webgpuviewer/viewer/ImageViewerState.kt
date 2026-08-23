@@ -1,6 +1,7 @@
 package ca.mpreg.webgpuviewer.viewer
 
 import android.content.res.Resources
+import android.util.Log
 import android.view.Surface
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -161,6 +162,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
 
     @Synchronized
     fun init(scope: CoroutineScope, surface: Surface, width: Int, height: Int) {
+        Log.i("ImageViewerState", "Viewer init ${width}x${height} vertical=$isVertical")
         this.renderer.init(scope, surface, width, height)
         this.scope = scope
 
@@ -342,6 +344,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     }
 
     fun cleanup() {
+        Log.i("ImageViewerState", "Viewer cleanup")
         animationJob?.cancel()
         tiles.cleanup()
         renderer.cleanup()
