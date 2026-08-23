@@ -6,7 +6,7 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.splineBasedDecay
-import androidx.compose.foundation.AndroidExternalSurface
+import androidx.compose.foundation.AndroidEmbeddedExternalSurface
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -55,7 +55,8 @@ fun ImageViewerContinuous(
     val doubleTapScale = minScale * 2f
     val maxScale = max(doubleTapScale * 2f, 4f)
 
-    AndroidExternalSurface(
+    // See ImageViewer.kt: AndroidEmbeddedExternalSurface over AndroidExternalSurface.
+    AndroidEmbeddedExternalSurface(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) {

@@ -5,7 +5,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.AndroidExternalSurface
+import androidx.compose.foundation.AndroidEmbeddedExternalSurface
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -68,7 +68,13 @@ fun ImageViewer(
         state.cutoutTopPx = if (state.avoidCutout) cutoutPx else 0f
     }
 
-    AndroidExternalSurface(
+    // AndroidExternalSurface places the SurfaceView on a window layer behind the activity's
+    // window (AndroidExternalSurfaceZOrder.Behind) and relies on the HWUI hole-punch for
+    // visibility. On some Android 11 OEM builds that punch silently fails - every frame
+    // renders into the surface with no errors, but the screen stays black and the content
+    // only flashes when the reader closes (mihonapp/mihon#3773). The embedded variant
+    // composites the surface like any regular view and has the same callback contract.
+    AndroidEmbeddedExternalSurface(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) {
