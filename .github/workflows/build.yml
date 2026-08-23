@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - fix/black-screen
     tags:
       - "*"
     paths-ignore:
@@ -37,7 +38,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Build Library
+        run: ./gradlew :library:assembleRelease
+
       - name: Publish Artifact
+        if: github.repository == 'mpreg-ca/webgpuviewer'
         run: ./gradlew publishToMavenCentral
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
