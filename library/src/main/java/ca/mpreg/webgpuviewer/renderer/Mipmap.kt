@@ -71,8 +71,6 @@ class Mipmap(
 
     /** Allocate the tile textures and copy [pixels] into them a chunk at a time. */
     private suspend fun upload(pixels: ByteBuffer) {
-        val rowsPerChunk = (UPLOAD_CHUNK_BYTES / (width * Int.SIZE_BYTES)).coerceAtLeast(1)
-
         for (r in 0 until tilesRows) {
             val tileHeight = min((r + 1) * tilesize, height) - (r * tilesize)
             val y = r * tilesize
@@ -90,24 +88,15 @@ class Mipmap(
                     )
                 )
 
+                val dstPitch = alignedPitch(tileWidth)
+                val rowsPerChunk = (UPLOAD_CHUNK_BYTES / dstPitch).coerceAtLeast(1)
+                val stage = ByteBuffer.allocateDirect(dstPitch * rowsPerChunk)
+
                 var row = 0
                 while (row < tileHeight) {
                     val rows = min(rowsPerChunk, tileHeight - row)
 
-                    device.queue.writeTexture(
-                        dataLayout = GPUTexelCopyBufferLayout(
-                            // Long arithmetic: y * width overflows Int well before the byte
-                            // offset does on a large page.
-                            offset = ((y + row).toLong() * width + x) * Int.SIZE_BYTES,
-                            bytesPerRow = width * Int.SIZE_BYTES,
-                            rowsPerImage = height,
-                        ),
-                        data = pixels,
-                        destination = GPUTexelCopyTextureInfo(
-                            texture = texture, origin = GPUOrigin3D(y = row)
-                        ),
-                        writeSize = GPUExtent3D(tileWidth, rows),
-                    )
+                    uploadTileRows(pixels, x, y, tileWidth, row, rows, texture, stage, dstPitch)
 
                     row += rows
                     yield()
@@ -185,6 +174,45 @@ class Mipmap(
         tiles.clear()
     }
 
+    /** Row pitch WebGPU demands for a multi-row write: bytesPerRow must be a multiple of 256. */
+    private fun alignedPitch(tileWidth: Int): Int =
+        (tileWidth * Int.SIZE_BYTES + 255) / 256 * 256
+
+    /**
+     * Copy [rows] rows of the ([x], [y])-anchored, [tileWidth]-wide subrect of [pixels] through
+     * [stage] into [texture], starting at y = [dstRow]. The image's own row stride almost never
+     * satisfies WebGPU's bytesPerRow-multiple-of-256 rule for multi-row writes (any page width
+     * not divisible by 64 breaks it), so every source row is bulk-copied once into [stage],
+     * whose [dstPitch] is aligned, and the upload reads from there.
+     */
+    private fun uploadTileRows(
+        pixels: ByteBuffer, x: Int, y: Int, tileWidth: Int,
+        dstRow: Int, rows: Int, texture: GPUTexture, stage: ByteBuffer, dstPitch: Int,
+    ) {
+        val srcRowBytes = tileWidth * Int.SIZE_BYTES
+        val srcStride = width * Int.SIZE_BYTES
+        // Long arithmetic: y * width overflows Int well before the byte offset does on a large
+        // page - though every position used here fits back into an Int.
+        var srcOffset = ((y + dstRow).toLong() * width + x) * Int.SIZE_BYTES
+        val src = pixels.duplicate()
+        stage.clear()
+        for (r in 0 until rows) {
+            src.position(srcOffset.toInt())
+            src.limit(srcOffset.toInt() + srcRowBytes)
+            stage.position(r * dstPitch)
+            stage.put(src)
+            srcOffset += srcStride
+        }
+        stage.position(0)
+
+        device.queue.writeTexture(
+            dataLayout = GPUTexelCopyBufferLayout(offset = 0L, bytesPerRow = dstPitch, rowsPerImage = rows),
+            data = stage,
+            destination = GPUTexelCopyTextureInfo(texture = texture, origin = GPUOrigin3D(y = dstRow)),
+            writeSize = GPUExtent3D(tileWidth, rows),
+        )
+    }
+
     fun update(pixels: ByteBuffer) {
         var i = 0
 
@@ -196,18 +224,17 @@ class Mipmap(
                 val tileWidth = min((c + 1) * tilesize, width) - (c * tilesize)
 
                 Log.d("Renderer", "Update tile $c $r")
-                val size = GPUExtent3D(tileWidth, tileHeight)
+                val texture = textures[i++]
+                val dstPitch = alignedPitch(tileWidth)
+                val rowsPerChunk = (UPLOAD_CHUNK_BYTES / dstPitch).coerceAtLeast(1)
+                val stage = ByteBuffer.allocateDirect(dstPitch * rowsPerChunk)
 
-                device.queue.writeTexture(
-                    dataLayout = GPUTexelCopyBufferLayout(
-                        offset = (y * width + x) * 4L,
-                        bytesPerRow = width * Int.SIZE_BYTES,
-                        rowsPerImage = height,
-                    ),
-                    data = pixels,
-                    destination = GPUTexelCopyTextureInfo(texture = textures[i++]),
-                    writeSize = size,
-                )
+                var row = 0
+                while (row < tileHeight) {
+                    val rows = min(rowsPerChunk, tileHeight - row)
+                    uploadTileRows(pixels, x, y, tileWidth, row, rows, texture, stage, dstPitch)
+                    row += rows
+                }
             }
         }
     }
