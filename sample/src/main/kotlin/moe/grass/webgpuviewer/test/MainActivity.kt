@@ -89,13 +89,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             binding.composeView2.state.apply {
-                dpi = resources.displayMetrics.densityDpi / 100f
+//                dpi = resources.displayMetrics.densityDpi / 100f
 
 //                isVertical = true
 //                transition = TransitionBasic.Vertical
 
-                haveNext = true
-                havePrev = true
+//                haveNext = true
+//                havePrev = true
 
                 fetchPage = { index ->
                     if(index == -1) {
@@ -109,9 +109,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                post {
-                    render()
-                }
+//                post {
+//                    render()
+//                }
             }
         }
 
