@@ -969,7 +969,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
      * [delay] between [TILES_PER_BATCH_FALLBACK]-sized batches instead.
      */
     private fun schedule() {
-        if (workerActive) return
+        if (WebGpuRenderer.deviceLost || workerActive) return
         workerActive = true
         val timestampsSupported = device.hasFeature(FeatureName.TimestampQuery)
         workerScope.launch {
@@ -1254,17 +1254,26 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     }
 
     private suspend fun measureTileGpuTime(result: GPUBuffer) {
-        awaitPumped { result.mapAndAwait(MapMode.Read, 0, result.size) }
-        val timestamps = result.getConstMappedRange(0, 16)
-        timestamps.order(ByteOrder.nativeOrder())
-        val start = timestamps.getLong(0)
-        val end = timestamps.getLong(8)
-        result.unmap()
-        result.destroy()
-        if (end > start) {
+        try {
+            if (WebGpuRenderer.deviceLost) return
+            awaitPumped { result.mapAndAwait(MapMode.Read, 0, result.size) }
+            if (WebGpuRenderer.deviceLost) return
+            val timestamps = result.getConstMappedRange(0, 16)
+            timestamps.order(ByteOrder.nativeOrder())
+            val start = timestamps.getLong(0)
+            val end = timestamps.getLong(8)
+            result.unmap()
+            if (end > start) {
             val sampleNs = (end - start).toDouble()
             avgTileGpuNs =
                 if (avgTileGpuNs <= 0.0) sampleNs else avgTileGpuNs * 0.8 + sampleNs * 0.2
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Skipping GPU tile timing after device/surface loss", e)
+        } finally {
+            try { result.destroy() } catch (_: Exception) { }
         }
     }
 
@@ -1415,6 +1424,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
      * rendering simply refills the cache.
      */
     fun cleanup() {
+        workerScope.coroutineContext[Job]?.children?.forEach { it.cancel() }
         workerScope.launch {
             pages.values.forEach { it.destroyAll() }
             pages.clear()

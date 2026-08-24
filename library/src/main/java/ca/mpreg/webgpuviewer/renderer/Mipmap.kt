@@ -15,6 +15,7 @@ import androidx.webgpu.TextureFormat
 import androidx.webgpu.TextureUsage
 import kotlinx.coroutines.yield
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.min
 
@@ -71,10 +72,11 @@ class Mipmap(
 
     /** Allocate the tile textures and copy [pixels] into them a chunk at a time. */
     private suspend fun upload(pixels: ByteBuffer) {
-        val bytesPerRow = width * Int.SIZE_BYTES
-        Log.d("Renderer", "Mipmap upload bytesPerRow=$bytesPerRow")
-        if (bytesPerRow % 256 != 0) Log.w("Renderer", "Mipmap bytesPerRow=$bytesPerRow is not 256-aligned")
-        val rowsPerChunk = (UPLOAD_CHUNK_BYTES / (width * Int.SIZE_BYTES)).coerceAtLeast(1)
+        val sourceBytesPerRow = width * Int.SIZE_BYTES
+        val paddedBytesPerRow = ((sourceBytesPerRow + 255) / 256) * 256
+        Log.d("Renderer", "Mipmap upload bytesPerRow=$sourceBytesPerRow padded=$paddedBytesPerRow")
+        val rowsPerChunk = (UPLOAD_CHUNK_BYTES / paddedBytesPerRow).coerceAtLeast(1)
+        val source = pixels.duplicate().order(ByteOrder.nativeOrder())
 
         for (r in 0 until tilesRows) {
             val tileHeight = min((r + 1) * tilesize, height) - (r * tilesize)
@@ -97,15 +99,18 @@ class Mipmap(
                 while (row < tileHeight) {
                     val rows = min(rowsPerChunk, tileHeight - row)
 
+                    val upload = ByteBuffer.allocateDirect(rows * paddedBytesPerRow).order(ByteOrder.nativeOrder())
+                    for (copyRow in 0 until rows) {
+                        val sourceOffset = ((y + row + copyRow).toLong() * sourceBytesPerRow + x * Int.SIZE_BYTES).toInt()
+                        source.position(sourceOffset)
+                        source.limit(sourceOffset + tileWidth * Int.SIZE_BYTES)
+                        upload.put(source)
+                        repeat(paddedBytesPerRow - tileWidth * Int.SIZE_BYTES) { upload.put(0) }
+                    }
+                    upload.flip()
                     device.queue.writeTexture(
-                        dataLayout = GPUTexelCopyBufferLayout(
-                            // Long arithmetic: y * width overflows Int well before the byte
-                            // offset does on a large page.
-                            offset = ((y + row).toLong() * width + x) * Int.SIZE_BYTES,
-                            bytesPerRow = width * Int.SIZE_BYTES,
-                            rowsPerImage = height,
-                        ),
-                        data = pixels,
+                        dataLayout = GPUTexelCopyBufferLayout(offset = 0, bytesPerRow = paddedBytesPerRow, rowsPerImage = rows),
+                        data = upload,
                         destination = GPUTexelCopyTextureInfo(
                             texture = texture, origin = GPUOrigin3D(y = row)
                         ),
@@ -201,13 +206,20 @@ class Mipmap(
                 Log.d("Renderer", "Update tile $c $r")
                 val size = GPUExtent3D(tileWidth, tileHeight)
 
+                val sourceStride = width * Int.SIZE_BYTES
+                val paddedStride = ((tileWidth * Int.SIZE_BYTES + 255) / 256) * 256
+                val upload = ByteBuffer.allocateDirect(tileHeight * paddedStride)
+                val source = pixels.duplicate()
+                for (copyRow in 0 until tileHeight) {
+                    source.position(((y + copyRow) * sourceStride) + x * 4)
+                    source.limit(source.position() + tileWidth * 4)
+                    upload.put(source)
+                    repeat(paddedStride - tileWidth * 4) { upload.put(0) }
+                }
+                upload.flip()
                 device.queue.writeTexture(
-                    dataLayout = GPUTexelCopyBufferLayout(
-                        offset = (y * width + x) * 4L,
-                        bytesPerRow = width * Int.SIZE_BYTES,
-                        rowsPerImage = height,
-                    ),
-                    data = pixels,
+                    dataLayout = GPUTexelCopyBufferLayout(offset = 0, bytesPerRow = paddedStride, rowsPerImage = tileHeight),
+                    data = upload,
                     destination = GPUTexelCopyTextureInfo(texture = textures[i++]),
                     writeSize = size,
                 )

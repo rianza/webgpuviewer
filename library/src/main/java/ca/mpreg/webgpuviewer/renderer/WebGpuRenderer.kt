@@ -3,7 +3,6 @@ package ca.mpreg.webgpuviewer.renderer
 import android.util.Log
 import android.view.Surface
 import androidx.webgpu.DeviceLostCallback
-import androidx.webgpu.DeviceLostException
 import androidx.webgpu.FeatureLevel
 import androidx.webgpu.FeatureName
 import androidx.webgpu.GPU.createInstance
@@ -42,6 +41,7 @@ class WebGpuRenderer {
         var instance: GPUInstance
         var adapter: GPUAdapter
         var device: GPUDevice
+        @Volatile var deviceLost: Boolean = false
         private val mutex = Mutex()
 
         var offsetX: Float = 0f
@@ -130,6 +130,7 @@ class WebGpuRenderer {
                         intArrayOf()
                     }
 
+                deviceLost = false
                 device = adapter.requestDevice(
                     GPUDeviceDescriptor(
                         deviceLostCallback = defaultDeviceLostCallback,
@@ -241,10 +242,10 @@ class WebGpuRenderer {
 
         mutex.withLock {
             val surface = surface
-            if (surface == null) {
+            if (deviceLost || surface == null) {
                 if (!loggedMissingSurface) {
                     loggedMissingSurface = true
-                    Log.w("WebGpuRenderer", "render() skipped: no surface configured yet")
+                    Log.w("WebGpuRenderer", "render() skipped: inactive renderer or no surface configured yet")
                 }
                 return
             }
@@ -329,8 +330,8 @@ private val defaultUncapturedErrorCallback
 
 private val defaultDeviceLostCallback
     get(): DeviceLostCallback {
-        return DeviceLostCallback { device, reason, message ->
+        return DeviceLostCallback { _, reason, message ->
             Log.e("WebGpuRenderer", "GPU device lost: reason=$reason message=$message")
-            throw DeviceLostException(device, reason, message)
+            WebGpuRenderer.deviceLost = true
         }
     }
