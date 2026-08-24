@@ -238,6 +238,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
          * agree with where it sits.
          */
         var centerYOffset = 0f
+        var generation = 0L
 
         // The strictly visible tile range as of the last draw, in tile coordinates. The worker
         // prioritises against it at pull time, so a pan mid-fill redirects generation without
@@ -258,7 +259,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     }
 
     /** One tile of work for the shared worker - see [schedule]/[nextRequest]. */
-    private class Request(val state: PageTiles, val tx: Int, val ty: Int)
+    private class Request(val state: PageTiles, val tx: Int, val ty: Int, val generation: Long)
 
     // Access-ordered so getOrPut's read-then-maybe-write always moves the touched page to the
     // end (most recently drawn), whether or not it was already present - see RETAIN_MARGIN.
@@ -871,6 +872,8 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
         if (st.scale != pageScale || st.centerYOffset != centerYOffset) {
             val reason = if (st.scale != pageScale && st.centerYOffset != centerYOffset) "scale and centerYOffset" else if (st.scale != pageScale) "scale" else "centerYOffset"
             Log.d(TAG, "Wipe tile grid page=${pageId(page)} reason=$reason oldScale=${st.scale} newScale=$pageScale oldCenterYOffset=${st.centerYOffset} newCenterYOffset=$centerYOffset")
+            st.generation++
+            Log.i(TAG, "TileTrace viewport generation=${st.generation} page=${pageId(page)} scale=$pageScale centerYOffset=$centerYOffset")
             // Dawn keeps a destroyed texture alive until its command buffers retire, so
             // destroying now is safe. A changed centerYOffset at fixed scale means a placeholder
             // corrected its guessed height - invalidate the same way a scale change does.
@@ -938,6 +941,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             }
         }
         st.pending.retainAll(desired)
+        Log.v(TAG, "TileTrace draw page=${pageId(page)} generation=${st.generation} visible=${desired.size} ready=${st.tiles.size} pending=${st.pending.size}")
 
         // Drop tiles outside this frame's wanted range - without this, a continuous-mode page
         // scrolling past keeps accumulating tiles that may never hit evict()'s global cap on
@@ -980,6 +984,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
                     val measurements = ArrayList<Job>(batchSize)
                     while (generated < batchSize) {
                         val req = nextRequest() ?: break
+                        Log.d(TAG, "TileTrace tile-start generation=${req.generation} current=${req.state.generation} tx=${req.tx} ty=${req.ty} page=${pageId(req.state.page)}")
                         try {
                             generate(req, this)?.let { measurements.add(it) }
                             generated++
@@ -1044,7 +1049,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
 
         if (bestState == null) return null
         bestState.pending.remove(bestKey)
-        return Request(bestState, (bestKey shr 32).toInt(), bestKey.toInt())
+        return Request(bestState, (bestKey shr 32).toInt(), bestKey.toInt(), bestState.generation)
     }
 
     /**
@@ -1201,6 +1206,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     ): Job? {
         val key = key(tx, ty)
         if (st.tiles.containsKey(key)) return null
+        val generation = st.generation
         evict()
 
         val queries = timestampQuerySet
@@ -1216,8 +1222,13 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
                 device.queue.submit(arrayOf(encoder.finish()))
 
                 writeTileUniform(uniform, tx, ty)
+                if (generation != st.generation || WebGpuRenderer.deviceLost) {
+                    Log.i(TAG, "TileTrace tile-discard generation=$generation current=${st.generation} tx=$tx ty=$ty page=${pageId(st.page)}")
+                    return@withTileTexture
+                }
                 val bindGroup = tileBindGroup(st.frameUniform, uniform, texture)
                 st.tiles[key] = Tile(texture, uniform, bindGroup).also { it.lastUsed = frame }
+                Log.d(TAG, "TileTrace tile-commit generation=$generation tx=$tx ty=$ty page=${pageId(st.page)}")
             }
             return null
         }
