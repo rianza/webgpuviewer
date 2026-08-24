@@ -57,6 +57,8 @@ class Mipmap(
                 tilesRows = ceil(height.toFloat() / tilesize).toInt(),
                 tilesize = tilesize,
             )
+            val startedNs = System.nanoTime()
+            Log.d("MipmapTrace", "start level=${width}x${height} scale=$scale tiles=${mipmap.tilesCols}x${mipmap.tilesRows}")
             try {
                 mipmap.upload(pixels)
             } catch (e: Throwable) {
@@ -66,6 +68,7 @@ class Mipmap(
                 mipmap.cleanup()
                 throw e
             }
+            Log.d("MipmapTrace", "complete level=${width}x${height} durationMs=${(System.nanoTime() - startedNs) / 1_000_000}")
             return mipmap
         }
     }
