@@ -869,6 +869,8 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
         }
 
         if (st.scale != pageScale || st.centerYOffset != centerYOffset) {
+            val reason = if (st.scale != pageScale && st.centerYOffset != centerYOffset) "scale and centerYOffset" else if (st.scale != pageScale) "scale" else "centerYOffset"
+            Log.d(TAG, "Wipe tile grid page=${pageId(page)} reason=$reason oldScale=${st.scale} newScale=$pageScale oldCenterYOffset=${st.centerYOffset} newCenterYOffset=$centerYOffset")
             // Dawn keeps a destroyed texture alive until its command buffers retire, so
             // destroying now is safe. A changed centerYOffset at fixed scale means a placeholder
             // corrected its guessed height - invalidate the same way a scale change does.

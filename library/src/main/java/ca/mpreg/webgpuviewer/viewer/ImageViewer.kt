@@ -1,5 +1,7 @@
 package ca.mpreg.webgpuviewer.viewer
 
+import android.util.Log
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
@@ -476,11 +478,13 @@ fun ImageViewer(
             }, isOpaque = false
     ) {
         onSurface { surface, width, height ->
+            Log.i("ImageViewer", "onSurface created/changed: ${width}x${height} surface=${System.identityHashCode(surface)}")
             try {
                 state.init(scope, surface, width, height)
                 state.invalidate()
                 state.collect()
             } finally {
+                Log.i("ImageViewer", "onSurface destroyed: surface=${System.identityHashCode(surface)}")
                 state.cleanup()
             }
         }

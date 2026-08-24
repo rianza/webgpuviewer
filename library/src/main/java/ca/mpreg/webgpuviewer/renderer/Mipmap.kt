@@ -71,6 +71,9 @@ class Mipmap(
 
     /** Allocate the tile textures and copy [pixels] into them a chunk at a time. */
     private suspend fun upload(pixels: ByteBuffer) {
+        val bytesPerRow = width * Int.SIZE_BYTES
+        Log.d("Renderer", "Mipmap upload bytesPerRow=$bytesPerRow")
+        if (bytesPerRow % 256 != 0) Log.w("Renderer", "Mipmap bytesPerRow=$bytesPerRow is not 256-aligned")
         val rowsPerChunk = (UPLOAD_CHUNK_BYTES / (width * Int.SIZE_BYTES)).coerceAtLeast(1)
 
         for (r in 0 until tilesRows) {

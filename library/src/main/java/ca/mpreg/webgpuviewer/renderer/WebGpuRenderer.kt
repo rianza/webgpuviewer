@@ -18,6 +18,7 @@ import androidx.webgpu.GPUSurface
 import androidx.webgpu.GPUSurfaceConfiguration
 import androidx.webgpu.GPUSurfaceDescriptor
 import androidx.webgpu.GPUSurfaceSourceAndroidNativeWindow
+import androidx.webgpu.SurfaceGetCurrentTextureStatus
 import androidx.webgpu.GPUTexture
 import androidx.webgpu.TextureFormat
 import androidx.webgpu.TextureUsage
@@ -113,11 +114,14 @@ class WebGpuRenderer {
                     Log.e("WebGpuRenderer", message)
                     error(message)
                 }
-                Log.i(
-                    "WebGpuRenderer",
-                    "Adapter acquired: featureLevel=Compatibility " +
-                        "timestampQuery=${adapter.hasFeature(FeatureName.TimestampQuery)}"
-                )
+                val timestampQuery = adapter.hasFeature(FeatureName.TimestampQuery)
+                Log.i("WebGpuRenderer", "Adapter acquired: featureLevel=Compatibility timestampQuery=$timestampQuery")
+                try {
+                    val info = adapter.javaClass.getMethod("getInfo").invoke(adapter)
+                    Log.i("WebGpuRenderer", "Adapter info/driver GPU: $info")
+                } catch (e: Exception) {
+                    Log.w("WebGpuRenderer", "Adapter info unavailable on this WebGPU runtime", e)
+                }
 
                 val requiredFeatures =
                     if (adapter.hasFeature(FeatureName.TimestampQuery)) {
@@ -179,6 +183,8 @@ class WebGpuRenderer {
     @Volatile
     private var firstFrameLogged = false
 
+    private var presentedFrames = 0L
+
     var width: Int = 0
     var height: Int = 0
 
@@ -202,20 +208,18 @@ class WebGpuRenderer {
             this@WebGpuRenderer.surface = surface.let {
                 instance.createSurface(
                     GPUSurfaceDescriptor(
-                        surfaceSourceAndroidNativeWindow = GPUSurfaceSourceAndroidNativeWindow(
-                            windowFromSurface(it)
-                        )
+                        surfaceSourceAndroidNativeWindow = GPUSurfaceSourceAndroidNativeWindow(windowFromSurface(it))
                     )
                 ).apply {
-                    configure(
-                        GPUSurfaceConfiguration(
-                            device,
-                            width,
-                            height,
-                            TextureFormat.RGBA8Unorm,
-                            TextureUsage.RenderAttachment
-                        )
-                    )
+                    val capabilities = getCapabilities(adapter)
+                    Log.i("WebGpuRenderer", "Surface capabilities: formats=${capabilities.formats.contentToString()} presentModes=${capabilities.presentModes.contentToString()} alphaModes=${capabilities.alphaModes.contentToString()}")
+                    Log.i("WebGpuRenderer", "Surface configuration selected: format=${TextureFormat.RGBA8Unorm} size=${width}x${height} usage=${TextureUsage.RenderAttachment}")
+                    try {
+                        configure(GPUSurfaceConfiguration(device, width, height, TextureFormat.RGBA8Unorm, TextureUsage.RenderAttachment))
+                    } catch (e: Exception) {
+                        Log.e("WebGpuRenderer", "Surface configure failed", e)
+                        throw e
+                    }
                 }
             }
             loggedMissingSurface = false
@@ -245,10 +249,17 @@ class WebGpuRenderer {
                 return
             }
 
-            val texture = try {
-                surface.getCurrentTexture().texture
-            } catch (e: Exception) {
-                Log.w("WebGpuRenderer", "Failed to get current texture", e)
+            val surfaceTexture = try { surface.getCurrentTexture() } catch (e: Exception) {
+                Log.w("WebGpuRenderer", "Failed to get current texture", e); return
+            }
+            Log.d("WebGpuRenderer", "getCurrentTexture status=${surfaceTexture.status}")
+            if (surfaceTexture.status != SurfaceGetCurrentTextureStatus.SuccessOptimal &&
+                surfaceTexture.status != SurfaceGetCurrentTextureStatus.SuccessSuboptimal) {
+                Log.w("WebGpuRenderer", "Skipping frame: surface texture status=${surfaceTexture.status}")
+                return
+            }
+            val texture = surfaceTexture.texture ?: run {
+                Log.w("WebGpuRenderer", "Skipping frame: surface texture is null")
                 return
             }
 
@@ -257,6 +268,8 @@ class WebGpuRenderer {
                 fn(encoder, texture)
                 device.queue.submit(arrayOf(encoder.finish()))
                 surface.present()
+                presentedFrames++
+                Log.d("WebGpuRenderer", "Frame presented #$presentedFrames texture=${texture.width}x${texture.height}")
                 if (!firstFrameLogged) {
                     firstFrameLogged = true
                     Log.i("WebGpuRenderer", "First frame presented (${width}x${height})")
@@ -286,7 +299,8 @@ class WebGpuRenderer {
 
         val doCleanup: suspend () -> Unit = {
             mutex.withLock {
-                Log.i("WebGpuRenderer", "Surface released")
+                Log.i("WebGpuRenderer", "Surface released after $presentedFrames presented frames")
+                presentedFrames = 0
                 surface?.close()
                 surface = null
             }

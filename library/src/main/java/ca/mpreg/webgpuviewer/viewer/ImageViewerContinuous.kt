@@ -1,5 +1,7 @@
 package ca.mpreg.webgpuviewer.viewer
 
+import android.util.Log
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
@@ -491,11 +493,13 @@ fun ImageViewerContinuous(
             }, isOpaque = false
     ) {
         onSurface { surface, width, height ->
+            Log.i("ImageViewerContinuous", "onSurface created/changed: ${width}x${height} surface=${System.identityHashCode(surface)}")
             try {
                 state.init(scope, surface, width, height)
                 state.invalidate()
                 state.collect()
             } finally {
+                Log.i("ImageViewerContinuous", "onSurface destroyed: surface=${System.identityHashCode(surface)}")
                 state.cleanup()
             }
         }
