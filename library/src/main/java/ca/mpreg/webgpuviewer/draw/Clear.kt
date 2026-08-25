@@ -7,8 +7,12 @@ import androidx.webgpu.GPURenderPassDescriptor
 import androidx.webgpu.GPUTexture
 import androidx.webgpu.LoadOp
 import androidx.webgpu.StoreOp
+import ca.mpreg.webgpuviewer.log.WgvLog
+
+private const val TAG = "WGV.Draw"
 
 fun Draw.clear(encoder: GPUCommandEncoder, texture: GPUTexture, color: Int) {
+    WgvLog.v(TAG, "clear ${texture.width}x${texture.height} with #%08x".format(color))
     val r = ((color shr 16) and 0xFF) / 255.0
     val g = ((color shr 8) and 0xFF) / 255.0
     val b = (color and 0xFF) / 255.0

@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Offset
@@ -23,17 +24,20 @@ suspend fun AwaitPointerEventScope.waitForCleanUp(
             val event = awaitPointerEvent()
 
             if (event.changes.any { it.isConsumed }) {
+                WgvLog.d(TAG, "waitForCleanUp: event consumed elsewhere - gesture may start")
                 return@withTimeout null
             }
 
             val change = event.changes.firstOrNull { it.id == pointerId } ?: return@withTimeout null
 
             if (event.changes.any { it.id != pointerId && it.pressed }) {
+                WgvLog.d(TAG, "waitForCleanUp: second finger down - not a clean up")
                 return@withTimeout null
             }
 
             acc += event.calculatePan()
             if (acc.getDistance() > touchSlop) {
+                WgvLog.d(TAG, "waitForCleanUp: exceeded touchSlop ($touchSlop) - drag")
                 return@withTimeout null
             }
             if (change.changedToUp()) {
@@ -42,6 +46,7 @@ suspend fun AwaitPointerEventScope.waitForCleanUp(
         }
     }
 } catch (e: PointerEventTimeoutCancellationException) {
+    WgvLog.v(TAG, "waitForCleanUp: timed out after ${timeout}ms")
     null
 } as PointerEvent?
 
@@ -54,7 +59,10 @@ suspend fun AwaitPointerEventScope.waitForDown(timeout: Long) = try {
         down
     }
 } catch (e: PointerEventTimeoutCancellationException) {
+    WgvLog.v(TAG, "waitForDown: timed out after ${timeout}ms")
     null
 }
+
+private const val TAG = "WGV.Gesture"
 
 fun Float.orZero(): Float = if (this.isNaN()) 0f else this

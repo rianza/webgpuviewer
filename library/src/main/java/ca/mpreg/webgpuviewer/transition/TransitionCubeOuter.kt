@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.GPUCommandEncoder
 import androidx.webgpu.GPUTexture
@@ -9,6 +10,8 @@ import ca.mpreg.webgpuviewer.renderer.TileRenderer
 import ca.mpreg.webgpuviewer.viewer.ImagePage
 import kotlin.math.cos
 import kotlin.math.sin
+
+private const val TAG = "WGV.CubeOuter"
 
 object TransitionCubeOuter : Transition() {
     private const val HALF_PI = (Math.PI / 2.0).toFloat()
@@ -113,6 +116,7 @@ object TransitionCubeOuter : Transition() {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "CubeOuter: render frac=$frac")
         // CubeOuter rotates opposite to Cube, hence negated frac
         val t = if (frac < 0f) -frac else 1f - frac
 

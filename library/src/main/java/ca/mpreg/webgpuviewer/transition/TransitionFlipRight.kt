@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.webgpu.BufferUsage
@@ -31,6 +32,8 @@ import kotlin.math.atan2
  * Same shape as [TransitionFlipLeft] - each page is rendered flat into a cached screen-sized
  * texture once, and only the fold is per-frame.
  */
+private const val TAG = "WGV.FlipRight"
+
 object TransitionFlipRight : Transition() {
     override val premultipliedOutput = true
 
@@ -174,6 +177,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "FlipRight: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)

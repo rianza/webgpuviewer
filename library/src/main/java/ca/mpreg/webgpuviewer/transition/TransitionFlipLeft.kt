@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.util.fastCoerceAtLeast
 import androidx.webgpu.BufferUsage
@@ -38,6 +39,8 @@ import kotlin.math.atan2
  * see [ImagePage.pageRect] - so a page narrower or shorter than the surface folds as itself, not as a
  * screen-sized sheet.
  */
+private const val TAG = "WGV.FlipLeft"
+
 object TransitionFlipLeft : Transition() {
     override val premultipliedOutput = true
 
@@ -176,6 +179,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "FlipLeft: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)

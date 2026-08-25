@@ -114,6 +114,9 @@ private val byteBufferLocal = ThreadLocal.withInitial {
  * buffer would give every circle in the batch the last colour written.
  */
 fun Draw.circle(pass: GPURenderPassEncoder, cx: Float, cy: Float, radius: Float, color: Int) {
+    ca.mpreg.webgpuviewer.log.WgvLog.v(
+        "WGV.Draw", "circle c=(%.3f,%.3f) r=%.3f #%08x".format(cx, cy, radius, color)
+    )
     val r = ((color shr 16) and 0xFF) / 255f
     val g = ((color shr 8) and 0xFF) / 255f
     val b = (color and 0xFF) / 255f

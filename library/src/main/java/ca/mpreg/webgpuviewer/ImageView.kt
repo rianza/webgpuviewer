@@ -4,8 +4,11 @@ import android.content.Context
 import android.util.AttributeSet
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.AbstractComposeView
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.viewer.ImageViewer
 import ca.mpreg.webgpuviewer.viewer.ImageViewerState
+
+private const val TAG = "WGV.View"
 
 open class ImageView(
     context: Context,
@@ -24,8 +27,13 @@ open class ImageView(
 
     open val state: ImageViewerState = ImageViewerState(isVertical, isReversed)
 
+    init {
+        WgvLog.i(TAG, "ImageView created (vertical=$isVertical, reversed=$isReversed, attrs=$attrs)")
+    }
+
     @Composable
     override fun Content() {
+        WgvLog.v(TAG, "ImageView.Content composing")
         ImageViewer(state = state)
     }
 }

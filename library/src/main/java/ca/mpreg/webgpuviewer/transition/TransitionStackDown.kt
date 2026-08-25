@@ -1,10 +1,13 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.GPUCommandEncoder
 import androidx.webgpu.GPUTexture
 import ca.mpreg.webgpuviewer.renderer.TileRenderer
 import ca.mpreg.webgpuviewer.viewer.ImagePage
+
+private const val TAG = "WGV.StackDown"
 
 object TransitionStackDown : Transition() {
     override fun render(
@@ -17,6 +20,7 @@ object TransitionStackDown : Transition() {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "StackDown: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)

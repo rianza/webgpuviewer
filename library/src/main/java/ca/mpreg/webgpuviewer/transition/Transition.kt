@@ -1,6 +1,7 @@
 package ca.mpreg.webgpuviewer.transition
 
 import androidx.compose.ui.geometry.Offset
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.webgpu.BlendFactor
 import androidx.webgpu.BlendOperation
 import androidx.webgpu.BufferUsage
@@ -41,6 +42,8 @@ import ca.mpreg.webgpuviewer.viewer.ImagePage
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.pow
+
+private const val TAG = "WGV.Transition"
 
 abstract class Transition {
     open val code: String = ""
@@ -102,6 +105,7 @@ abstract class Transition {
     companion object {
         // Shared blit pipeline for all transitions
         private val blitPipeline: GPURenderPipeline by lazy {
+            WgvLog.d(TAG, "Building shared transition blit pipeline")
             val device = WebGpuRenderer.device
             val shaderModule = device.createShaderModule(
                 GPUShaderModuleDescriptor(shaderSourceWGSL = GPUShaderSourceWGSL(BLIT_SHADER))
@@ -228,6 +232,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Recreate if size changed
             if (cacheWidth != width || cacheHeight != height) {
+                WgvLog.d(TAG, "Transition cache resize: ${cacheWidth}x$cacheHeight -> ${width}x$height (old pair deferred)")
                 // Defer destruction of old textures
                 pendingDestroy1 = texture1
                 pendingDestroy2 = texture2
@@ -289,6 +294,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
          */
         fun invalidateCache() {
             synchronized(cacheLock) {
+                WgvLog.d(TAG, "invalidateCache: wiping cache slots")
                 cachedPage1 = null
                 cachedPage2 = null
                 blittedKeys1 = emptySet()
@@ -306,11 +312,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             synchronized(cacheLock) {
                 when {
                     cacheHitLocked(newCurrentPage, true) -> {
+                        WgvLog.d(TAG, "rotateCache: slot 2 already holds the new current page")
                         cachedPage2 = null
                         blittedKeys2 = emptySet()
                     }
 
                     cacheHitLocked(newCurrentPage, false) -> {
+                        WgvLog.d(TAG, "rotateCache: promoting slot 2 (prewarmed) to slot 1")
                         val t = texture1; texture1 = texture2; texture2 = t
                         val v = view1; view1 = view2; view2 = v
                         cachedPage1 = cachedPage2
@@ -324,6 +332,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
 
                     else -> {
+                        WgvLog.v(TAG, "rotateCache: no slot matches - full wipe")
                         cachedPage1 = null
                         cachedPage2 = null
                         blittedKeys1 = emptySet()
@@ -366,7 +375,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             dstHeight: Int,
             tiles: TileRenderer,
         ): GPUTextureView? {
-            if (page.destroyed || !page.isDecoded) return null
+            if (page.destroyed || !page.isDecoded) {
+                WgvLog.v(TAG, "getCachedTexture(page=$isPage1): skipped (destroyed=${page.destroyed}, decoded=${page.isDecoded})")
+                return null
+            }
 
             // Lock only for metadata - GPU recording runs on the single GPU thread and doesn't
             // need it; cacheLock only guards against invalidateCache() from the UI thread.
@@ -387,8 +399,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             val available = page.newlyAvailableTileKeys(tiles, texture)
 
             if (identityMatches && (available == null || available == blittedKeys)) {
+                WgvLog.throttled(TAG, key = "cache-hit", intervalMs = 500L) {
+                    "getCachedTexture(page${if (isPage1) "1" else "2"}): cache hit"
+                }
                 return view
             }
+            WgvLog.v(
+                TAG,
+                "getCachedTexture(page${if (isPage1) "1" else "2"}): seeding/incremental " +
+                    "(identityMatches=$identityMatches, newTiles=${available?.size ?: 0})"
+            )
 
             val pageX = page.x
             val pageY = page.y

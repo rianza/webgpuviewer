@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.BufferUsage
 import androidx.webgpu.FilterMode
@@ -33,6 +34,8 @@ import java.nio.ByteOrder
  * A hemisphere maps the page's rect within the cache - see [ImagePage.pageRect] - so it stays page-shaped
  * rather than taking the surface's proportions.
  */
+private const val TAG = "WGV.Sphere"
+
 object TransitionSphere : Transition() {
     override val premultipliedOutput = true
 
@@ -189,6 +192,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "Sphere: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)

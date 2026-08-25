@@ -46,6 +46,7 @@ import androidx.webgpu.VertexStepMode
 import ca.mpreg.webgpuviewer.draw.Font.Companion.FIXED_RASTER_SIZE
 import ca.mpreg.webgpuviewer.draw.Font.Companion.forFamily
 import ca.mpreg.webgpuviewer.draw.Font.Companion.invoke
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -68,6 +69,8 @@ private val device get() = WebGpuRenderer.device
  * Doesn't chunk the initial atlas upload the way [ca.mpreg.webgpuviewer.renderer.Mipmap] does for
  * page images - a font atlas is expected to stay well under a single `writeTexture` call's limit.
  */
+private const val TAG = "WGV.Text"
+
 class Font private constructor(
     private var atlasTexture: GPUTexture,
     internal var atlasWidth: Int,
@@ -129,6 +132,7 @@ class Font private constructor(
     internal fun ensureGlyph(codepoint: Int): Glyph? {
         glyphs[codepoint]?.let { return it }
         val rasterizer = rasterizer ?: return null
+        WgvLog.v(TAG, "ensureGlyph: rasterizing missing codepoint U+%04X".format(codepoint))
         val glyph = addGlyph(
             rasterizer,
             rasterizeGlyph(rasterizer.paint, codepoint, rasterizer.rasterSize, rasterizer.padding)
@@ -185,6 +189,7 @@ class Font private constructor(
 
     /** Grows the atlas to at least [newWidth] x [newHeight] - existing glyphs keep their pixel offsets, so nothing about them needs recomputing. */
     private fun growAtlas(r: Rasterizer, newWidth: Int, newHeight: Int) {
+        WgvLog.d(TAG, "growAtlas: ${atlasWidth}x$atlasHeight -> ${newWidth}x$newHeight")
         val newPixels = ByteArray(newWidth * newHeight * 4)
         for (row in 0 until atlasHeight) {
             System.arraycopy(
@@ -223,7 +228,10 @@ class Font private constructor(
     internal fun kerning(first: Int, second: Int): Float =
         kerningPairs[(first.toLong() shl 32) or (second.toLong() and 0xFFFFFFFFL)] ?: 0f
 
-    fun destroy() = atlasTexture.destroy()
+    fun destroy() {
+        WgvLog.d(TAG, "Font.destroy: releasing atlas ${atlasWidth}x$atlasHeight")
+        atlasTexture.destroy()
+    }
 
     companion object {
         /** Loads a font from an msdf-atlas-gen [json] layout and its already-decoded [bitmap] atlas. */
@@ -236,6 +244,7 @@ class Font private constructor(
 
         /** Loads a font from an msdf-atlas-gen [json] layout and raw RGBA8 [pixels]. */
         operator fun invoke(pixels: ByteBuffer, width: Int, height: Int, json: String): Font {
+            WgvLog.d(TAG, "Font.load ${width}x$height from atlas JSON (${json.length} chars)")
             val root = JSONObject(json)
             val atlas = root.getJSONObject("atlas")
             val metrics = root.optJSONObject("metrics")
@@ -376,7 +385,11 @@ class Font private constructor(
         ): Font {
             val key = FamilyKey(fontFamily, weight, style)
             synchronized(familyCache) {
-                familyCache[key]?.let { return it }
+                familyCache[key]?.let {
+                    WgvLog.v(TAG, "Font.forFamily: cache hit $key")
+                    return it
+                }
+                WgvLog.d(TAG, "Font.forFamily: building font for $key (${chars.length} chars)")
                 val font = buildFromFamily(context, fontFamily, weight, style, chars)
                 familyCache[key] = font
                 return font
@@ -834,6 +847,9 @@ fun Draw.text(
 ) {
     if (text.isEmpty()) return
 
+    WgvLog.throttled(TAG, key = "text", intervalMs = 500L) {
+        "Draw.text: ${text.length} char(s), size=$size, align=$align"
+    }
     val screenPxRange = (size / font.atlasFontSize) * font.distanceRange
     val dstWidth = dst.width.toFloat()
     val dstHeight = dst.height.toFloat()

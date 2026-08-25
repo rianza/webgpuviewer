@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.GPUCommandEncoder
 import androidx.webgpu.GPUTexture
@@ -15,6 +16,8 @@ import ca.mpreg.webgpuviewer.viewer.ImagePage
  * opens its own pass), skipping the getCachedTexture/blitCached cache-texture indirection every
  * other transition uses.
  */
+private const val TAG = "WGV.None"
+
 object TransitionNone : Transition() {
     override fun render(
         page1: ImagePage,
@@ -26,6 +29,7 @@ object TransitionNone : Transition() {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "None: render frac=$frac")
         page1.renderCacheSeed(encoder, dst, tiles)
     }
 }

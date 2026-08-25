@@ -79,6 +79,9 @@ fun Draw.line(
     color: Int,
     thickness: Float
 ) {
+    ca.mpreg.webgpuviewer.log.WgvLog.v(
+        "WGV.Draw", "line (%.3f,%.3f)-(%.3f,%.3f) #%08x w=%.3f".format(x1, y1, x2, y2, color, thickness)
+    )
     val r = ((color shr 16) and 0xFF) / 255f
     val g = ((color shr 8) and 0xFF) / 255f
     val b = (color and 0xFF) / 255f

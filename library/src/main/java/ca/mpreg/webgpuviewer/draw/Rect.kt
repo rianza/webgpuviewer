@@ -157,6 +157,9 @@ fun Draw.rect(
     y2: Float,
     color: Int
 ) {
+    ca.mpreg.webgpuviewer.log.WgvLog.v(
+        "WGV.Draw", "rect (%.3f,%.3f)-(%.3f,%.3f) #%08x".format(x1, y1, x2, y2, color)
+    )
     val r = ((color shr 16) and 0xFF) / 255f
     val g = ((color shr 8) and 0xFF) / 255f
     val b = (color and 0xFF) / 255f

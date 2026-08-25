@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.GPUCommandEncoder
 import androidx.webgpu.GPUTexture
@@ -17,6 +18,8 @@ import ca.mpreg.webgpuviewer.viewer.ImagePage
  * Each page's background is drawn separately, live, at the same offset - see
  * [ImagePage.drawBackgroundColumns].
  */
+private const val TAG = "WGV.Basic"
+
 object TransitionBasic : Transition() {
     override fun render(
         page1: ImagePage,
@@ -28,6 +31,7 @@ object TransitionBasic : Transition() {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "Basic: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)
@@ -62,6 +66,7 @@ object TransitionBasic : Transition() {
             pos2: Offset,
             tiles: TileRenderer,
         ) {
+            WgvLog.d(TAG, "Basic.Vertical: render frac=$frac")
             val cached1 =
                 getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 

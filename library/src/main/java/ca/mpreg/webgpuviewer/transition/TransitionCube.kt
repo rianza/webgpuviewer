@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer.transition
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import androidx.compose.ui.geometry.Offset
 import androidx.webgpu.BufferUsage
 import androidx.webgpu.FilterMode
@@ -37,6 +38,8 @@ import kotlin.math.sin
  * flips and the sphere, which map the page's rect. Each face also gets a background column behind
  * it, spanning its projected width and the full height of the surface.
  */
+private const val TAG = "WGV.Cube"
+
 object TransitionCube : Transition() {
     override val premultipliedOutput = true
 
@@ -218,6 +221,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         pos2: Offset,
         tiles: TileRenderer,
     ) {
+        WgvLog.d(TAG, "Cube: render frac=$frac")
         val cached1 = getCachedTexture(page1, true, encoder, dst.width, dst.height, tiles)
 
         val cached2 = getCachedTexture(page2, false, encoder, dst.width, dst.height, tiles)

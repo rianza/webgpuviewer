@@ -1,7 +1,6 @@
 package ca.mpreg.webgpuviewer
 
 import android.graphics.Rect
-import android.util.Log
 import androidx.webgpu.BufferUsage
 import androidx.webgpu.GPUBindGroupDescriptor
 import androidx.webgpu.GPUBindGroupEntry
@@ -16,6 +15,7 @@ import androidx.webgpu.GPUTexture
 import androidx.webgpu.MapMode
 import ca.mpreg.webgpuviewer.Trim.Companion.detectBackgroundInContext
 import ca.mpreg.webgpuviewer.Trim.Companion.findInContext
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.renderer.Image
 import ca.mpreg.webgpuviewer.renderer.Mipmap
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer
@@ -32,7 +32,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 class Trim {
     companion object {
-        private const val TAG = "Trim"
+        private const val TAG = "WGV.Trim"
 
         private val device get() = WebGpuRenderer.device
         private val instance get() = WebGpuRenderer.instance
@@ -56,6 +56,7 @@ class Trim {
         ): List<Rect> {
             require(colors.isNotEmpty()) { "colors must not be empty" }
             require(colors.all { it.size >= 3 }) { "each color must have at least 3 elements [r, g, b]" }
+            WgvLog.d(TAG, "findAllCpu: ${width}x$height, ${colors.size} color(s), threshold=$threshold")
 
             val flat = FloatArray(colors.size * 3)
             colors.forEachIndexed { i, color ->
@@ -66,7 +67,7 @@ class Trim {
 
             val bounds = IntArray(colors.size * 4)
             if (!TrimNative.findTrim(pixels, width, height, flat, threshold, bounds)) {
-                Log.w(TAG, "findAllCpu: native trim rejected ${width}x$height, using full bounds")
+                WgvLog.w(TAG, "findAllCpu: native trim rejected ${width}x$height, using full bounds")
                 return List(colors.size) { Rect(0, 0, width, height) }
             }
 
@@ -102,10 +103,12 @@ class Trim {
             threshold: Float = 0.05f
         ): Int {
             if (!pixels.isDirect) {
-                Log.w(TAG, "detectBackgroundCpu: pixels not direct, defaulting to white")
+                WgvLog.w(TAG, "detectBackgroundCpu: pixels not direct, defaulting to white")
                 return 0xFFFFFFFF.toInt()
             }
-            return TrimNative.detectBackground(pixels, width, height, threshold)
+            val detected = TrimNative.detectBackground(pixels, width, height, threshold)
+            WgvLog.d(TAG, "detectBackgroundCpu: ${width}x$height -> #%08x".format(detected))
+            return detected
         }
 
         /**
@@ -426,7 +429,7 @@ class Trim {
                                 res.complete(EdgeResult(isSolid, total, sumR, sumG, sumB))
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error reading edge detect result", e)
+                            WgvLog.e(TAG, "Error reading edge detect result", e)
                             res.complete(EdgeResult(false, 1, 0f, 0f, 0f))
                         } finally {
                             uniformBuffer.destroy()
@@ -436,7 +439,7 @@ class Trim {
                     }
 
                     override fun onError(exception: Exception) {
-                        Log.e(TAG, "Error in edge detect mapAsync", exception)
+                        WgvLog.e(TAG, "Error in edge detect mapAsync", exception)
                         res.complete(EdgeResult(false, 1, 0f, 0f, 0f))
                         uniformBuffer.destroy()
                         resultBuffer.destroy()
@@ -785,25 +788,28 @@ fn find_bottom(@builtin(global_invocation_id) global_id: vec3<u32>) {
             threshold: Float
         ): Rect {
             if (image.mipmaps.isEmpty()) {
-                Log.w(TAG, "findInContext: image has no mipmaps, returning full bounds")
+                WgvLog.w(TAG, "findInContext: image has no mipmaps, returning full bounds")
                 return Rect(0, 0, image.width, image.height)
             }
 
             val mipmap = image.mipmaps[0]
 
             if (mipmap.textures.isEmpty()) {
-                Log.w(TAG, "findInContext: mipmap has no textures, returning full bounds")
+                WgvLog.w(TAG, "findInContext: mipmap has no textures, returning full bounds")
                 return Rect(0, 0, image.width, image.height)
             }
 
+            WgvLog.d(TAG, "findInContext: color=(%.3f,%.3f,%.3f) threshold=$threshold".format(r, g, b))
             return try {
-                if (mipmap.tilesCols == 1 && mipmap.tilesRows == 1) {
+                val rect = if (mipmap.tilesCols == 1 && mipmap.tilesRows == 1) {
                     findSingleTile(mipmap.textures[0], r, g, b, threshold)
                 } else {
                     findMultiTile(mipmap, r, g, b, threshold)
                 }
+                WgvLog.d(TAG, "findInContext: result $rect")
+                rect
             } catch (e: Exception) {
-                Log.e(TAG, "findInContext: error during trim detection, returning full bounds", e)
+                WgvLog.e(TAG, "findInContext: error during trim detection, returning full bounds", e)
                 Rect(0, 0, image.width, image.height)
             }
         }
@@ -999,7 +1005,7 @@ fn find_bottom(@builtin(global_invocation_id) global_id: vec3<u32>) {
                             stagingBuffer.unmap()
                             res.complete(rect)
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error reading trim result", e)
+                            WgvLog.e(TAG, "Error reading trim result", e)
                             res.complete(Rect(0, 0, texture.width, texture.height))
                         } finally {
                             uniformBuffer.destroy()
@@ -1009,7 +1015,7 @@ fn find_bottom(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
 
                     override fun onError(exception: Exception) {
-                        Log.e(TAG, "Error in trim mapAsync", exception)
+                        WgvLog.e(TAG, "Error in trim mapAsync", exception)
                         res.complete(Rect(0, 0, texture.width, texture.height))
                         uniformBuffer.destroy()
                         resultBuffer.destroy()

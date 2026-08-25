@@ -1,5 +1,6 @@
 package ca.mpreg.webgpuviewer
 
+import ca.mpreg.webgpuviewer.log.WgvLog
 import java.nio.ByteBuffer
 
 /**
@@ -15,6 +16,7 @@ import java.nio.ByteBuffer
 object TrimNative {
     init {
         System.loadLibrary("resize")
+        WgvLog.i("WGV.Trim", "TrimNative: native library 'resize' loaded")
     }
 
     /**
