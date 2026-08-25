@@ -35,8 +35,11 @@ import ca.mpreg.webgpuviewer.renderer.RenderPage.renderImage
 import ca.mpreg.webgpuviewer.renderer.RenderPage.samplerVariant
 import ca.mpreg.webgpuviewer.renderer.RenderPage.variantFor
 import ca.mpreg.webgpuviewer.viewer.ImagePage
+import ca.mpreg.webgpuviewer.log.WgvLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+
+private const val TAG = "WGV.RenderPage"
 
 /**
  * Draws a single image into a render pass. Every path that draws a page's live content comes
@@ -67,15 +70,18 @@ object RenderPage {
     }
 
     /** One of the three shaders, pipeline built on first use. */
-    internal class Variant(build: () -> GPURenderPipeline) {
-        val pipeline: GPURenderPipeline by lazy(build)
+    internal class Variant(private val name: String, build: () -> GPURenderPipeline) {
+        val pipeline: GPURenderPipeline by lazy {
+            WgvLog.d(TAG, "Building pipeline variant '$name' (first use)")
+            build().also { WgvLog.d(TAG, "Pipeline variant '$name' ready") }
+        }
     }
 
     // Every caller of renderFast is inside ImageViewerState/ImageViewerContinuousState's own
     // render pass, which always attaches TileRenderer's stencil buffer (see [stencilViewFor]) -
     // so samplerVariant's pipeline can carry the stencil test directly, skipping a pixel
     // TileRenderer's blit already wrote (stencil == 1) instead of shading it a second time.
-    private val samplerVariant = Variant {
+    private val samplerVariant = Variant("sampler") {
         buildPipeline(
             TILE_HEADER + TILE_VS_MAIN + TILE_SAMPLER_FS, depthStencil = GPUDepthStencilState(
                 format = TextureFormat.Stencil8,
@@ -87,22 +93,22 @@ object RenderPage {
             )
         )
     }
-    private val filteredVariant = Variant { buildPipeline(HEADER + VS_MAIN + FILTERED_FS) }
+    private val filteredVariant = Variant("filtered") { buildPipeline(HEADER + VS_MAIN + FILTERED_FS) }
 
     // As samplerVariant, but stencil-free - Transition's cache-seed pass has none, and doesn't
     // need one: it fills once, then tiles blit on top in later passes via ordinary blending.
     private val samplerVariantUnmasked =
-        Variant { buildPipeline(TILE_HEADER + TILE_VS_MAIN + TILE_SAMPLER_FS) }
+        Variant("sampler-unmasked") { buildPipeline(TILE_HEADER + TILE_VS_MAIN + TILE_SAMPLER_FS) }
 
     // Used by Transition's cache seed for non-highQuality pages, whose pass has no stencil
     // attachment at all - must stay stencil-free. See [plainVariantMasked] for the
     // stencil-pass-compatible twin ImageViewerState/Continuous use instead.
-    private val plainVariant = Variant { buildPipeline(TILE_HEADER + TILE_VS_MAIN + TILE_PLAIN_FS) }
+    private val plainVariant = Variant("plain") { buildPipeline(TILE_HEADER + TILE_VS_MAIN + TILE_PLAIN_FS) }
 
     // As plainVariant, but declares a no-op stencil state (always passes, never writes) purely so
     // it's valid to use within ImageViewerState/Continuous's stencil-attached pass alongside
     // samplerVariant/renderBackground's pipelines - it doesn't itself participate in masking.
-    private val plainVariantMasked = Variant {
+    private val plainVariantMasked = Variant("plain-masked") {
         buildPipeline(
             TILE_HEADER + TILE_VS_MAIN + TILE_PLAIN_FS, depthStencil = GPUDepthStencilState(
                 format = TextureFormat.Stencil8,
@@ -115,6 +121,10 @@ object RenderPage {
     private fun buildPipeline(
         code: String, depthStencil: GPUDepthStencilState? = null
     ): GPURenderPipeline {
+        WgvLog.d(
+            TAG,
+            "buildPipeline: ${code.length} WGSL chars, depthStencil=${depthStencil != null}"
+        )
         val shaderModule = device.createShaderModule(
             GPUShaderModuleDescriptor(shaderSourceWGSL = GPUShaderSourceWGSL(code))
         )
@@ -231,6 +241,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     internal fun drawMaskedRect(
         pass: GPURenderPassEncoder, x1: Float, y1: Float, x2: Float, y2: Float, color: Int
     ) {
+        WgvLog.v(TAG, "drawMaskedRect (%.3f,%.3f)-(%.3f,%.3f) #%08x".format(x1, y1, x2, y2, color))
         val r = ((color shr 16) and 0xFF) / 255f
         val g = ((color shr 8) and 0xFF) / 255f
         val b = (color and 0xFF) / 255f
@@ -747,11 +758,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) = renderImage(pass, image, dst, x, y, scale, filteredVariant)
 
     /** Picks one of the 4 tile pipelines - shared by [renderFast] and [ImagePage.Images.renderPage]. */
-    internal fun variantFor(linear: Boolean, masked: Boolean): Variant = when {
-        linear && masked -> samplerVariant
-        linear -> samplerVariantUnmasked
-        masked -> plainVariantMasked
-        else -> plainVariant
+    internal fun variantFor(linear: Boolean, masked: Boolean): Variant {
+        WgvLog.v(TAG, "variantFor(linear=$linear, masked=$masked)")
+        return when {
+            linear && masked -> samplerVariant
+            linear -> samplerVariantUnmasked
+            masked -> plainVariantMasked
+            else -> plainVariant
+        }
     }
 
     /**
@@ -769,7 +783,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         scale: Float,
         linear: Boolean = true,
         masked: Boolean = true
-    ) = renderImageTiled(pass, image, dst, x, y, scale, variantFor(linear, masked))
+    ) {
+        WgvLog.v(TAG, "renderFast: ${image.width}x${image.height} scale=$scale linear=$linear masked=$masked")
+        renderImageTiled(pass, image, dst, x, y, scale, variantFor(linear, masked))
+    }
 
     private fun renderImage(
         pass: GPURenderPassEncoder,
@@ -780,7 +797,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         scale: Float,
         variant: Variant
     ) {
-        val res = image.prepareForRender(dst, x, y, scale) ?: return
+        val res = image.prepareForRender(dst, x, y, scale)
+        if (res == null) {
+            WgvLog.v(TAG, "render: image ${image.width}x${image.height} has nothing to draw")
+            return
+        }
+        WgvLog.v(TAG, "render: mip level=${res.mipmap.scale}")
         draw(pass, image, dst, res, variant)
     }
 

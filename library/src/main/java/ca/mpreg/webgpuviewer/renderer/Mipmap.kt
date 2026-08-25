@@ -1,6 +1,5 @@
 package ca.mpreg.webgpuviewer.renderer
 
-import android.util.Log
 import androidx.webgpu.BufferUsage
 import androidx.webgpu.GPUBuffer
 import androidx.webgpu.GPUBufferDescriptor
@@ -14,9 +13,12 @@ import androidx.webgpu.GPUTextureView
 import androidx.webgpu.TextureFormat
 import androidx.webgpu.TextureUsage
 import kotlinx.coroutines.yield
+import ca.mpreg.webgpuviewer.log.WgvLog
 import java.nio.ByteBuffer
 import kotlin.math.ceil
 import kotlin.math.min
+
+private const val TAG = "WGV.Mipmap"
 
 class Mipmap(
     val width: Int,
@@ -56,12 +58,17 @@ class Mipmap(
                 tilesRows = ceil(height.toFloat() / tilesize).toInt(),
                 tilesize = tilesize,
             )
+            WgvLog.d(
+                TAG,
+                "create: level ${width}x$height scale=$scale grid=${mipmap.tilesCols}x${mipmap.tilesRows} (tile=$tilesize)"
+            )
             try {
                 mipmap.upload(pixels)
             } catch (e: Throwable) {
                 // Yielding makes the upload cancellable, so a half-built level can now exist.
                 // Free whatever landed before rethrowing - the caller never sees this instance
                 // and so can't free it itself.
+                WgvLog.w(TAG, "create: upload failed, cleaning up partial level", e)
                 mipmap.cleanup()
                 throw e
             }
@@ -80,7 +87,7 @@ class Mipmap(
                 val x = c * tilesize
                 val tileWidth = min((c + 1) * tilesize, width) - (c * tilesize)
 
-                Log.i("Renderer", "Create tile $c $r $tileWidth $tileHeight $x $y")
+                WgvLog.d(TAG, "upload: tile [$r,$c] ${tileWidth}x$tileHeight at ($x,$y)")
 
                 val texture = device.createTexture(
                     GPUTextureDescriptor(
@@ -130,6 +137,7 @@ class Mipmap(
         if (tilesCols <= 2 && tilesRows <= 2) {
             cachedQuad = Quad(tiles, tileViews, 0, 0)
         }
+        WgvLog.d(TAG, "upload complete: ${textures.size} texture(s) for ${width}x$height")
     }
 
     var textures: MutableList<GPUTexture> = mutableListOf()
@@ -142,6 +150,7 @@ class Mipmap(
     constructor(texture: GPUTexture, scale: Float, tilesize: Int) : this(
         texture.width, texture.height, scale, 1, 1, tilesize
     ) {
+        WgvLog.d(TAG, "wrap single texture ${texture.width}x${texture.height} scale=$scale")
         textures.add(texture)
         val view = texture.createView()
         textureViews.add(view)
@@ -153,6 +162,7 @@ class Mipmap(
     }
 
     constructor(width: Int, height: Int) : this(width, height, 1f, 1, 1, 4096) {
+        WgvLog.d(TAG, "create drawable mipmap ${width}x$height (single storage texture)")
         val texture = device.createTexture(
             GPUTextureDescriptor(
                 size = GPUExtent3D(width, height),
@@ -172,6 +182,7 @@ class Mipmap(
     }
 
     internal fun cleanup() {
+        WgvLog.d(TAG, "cleanup: ${width}x$height, destroying ${textures.size} texture(s)")
         cachedQuad = null
         lastQuad = null
         lastQuadTX = -1
@@ -195,7 +206,7 @@ class Mipmap(
                 val x = c * tilesize
                 val tileWidth = min((c + 1) * tilesize, width) - (c * tilesize)
 
-                Log.d("Renderer", "Update tile $c $r")
+                WgvLog.d(TAG, "update tile [$r,$c] ${tileWidth}x$tileHeight at ($x,$y)")
                 val size = GPUExtent3D(tileWidth, tileHeight)
 
                 device.queue.writeTexture(
@@ -240,7 +251,10 @@ class Mipmap(
         val arr = tileUniforms ?: arrayOfNulls<GPUBuffer>(textures.size).also { tileUniforms = it }
         return arr[index] ?: device.createBuffer(
             GPUBufferDescriptor(size = 32, usage = BufferUsage.Uniform or BufferUsage.CopyDst)
-        ).also { arr[index] = it }
+        ).also {
+            arr[index] = it
+            WgvLog.v(TAG, "tileUniformFor: allocated uniform buffer for tile index $index")
+        }
     }
 
     /**

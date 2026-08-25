@@ -1,7 +1,6 @@
 package ca.mpreg.webgpuviewer.renderer
 
 import android.graphics.Rect
-import android.util.Log
 import androidx.webgpu.BufferUsage
 import androidx.webgpu.GPUBuffer
 import androidx.webgpu.GPUBufferDescriptor
@@ -9,6 +8,7 @@ import androidx.webgpu.GPUTexture
 import androidx.webgpu.GPUTextureView
 import ca.mpreg.webgpuviewer.ImageUtil
 import ca.mpreg.webgpuviewer.Trim
+import ca.mpreg.webgpuviewer.log.WgvLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -17,6 +17,8 @@ import kotlin.math.log2
 import kotlin.math.round
 
 const val BUFFER_SIZE = 96L
+
+private const val TAG = "WGV.Image"
 
 class Image private constructor(
     val width: Int,
@@ -64,6 +66,12 @@ class Image private constructor(
             require(trimColors == null || trimColors.all { it.size >= 3 }) {
                 "each trimColor must have at least 3 elements [r, g, b]"
             }
+            WgvLog.i(
+                TAG,
+                "Creating image ${width}x$height (mipmaps=$createMipMaps, "
+                    + "trimColors=${trimColors?.size ?: 0}, threshold=$trimThreshold, "
+                    + "bgOverride=${backgroundColor?.let { "#%08x".format(it) } ?: "none"})"
+            )
 
             val image = Image(width, height)
 
@@ -82,6 +90,7 @@ class Image private constructor(
 
                     if (best != null) {
                         image.trim = best.second
+                        WgvLog.d(TAG, "Trim: winning rect ${best.second}")
                         // Set background color from the winning trim color
                         if (backgroundColor == null) {
                             val c = best.first
@@ -101,6 +110,11 @@ class Image private constructor(
                         Trim.detectBackgroundCpu(pixels, width, height, trimThreshold)
                 }
             }
+            WgvLog.d(
+                TAG,
+                "Image ${width}x$height: background=#%08x trim=${image.trim ?: "none"}"
+                    .format(image.backgroundColor)
+            )
 
             val tilesize = 2048
 
@@ -121,7 +135,7 @@ class Image private constructor(
                     scale /= 2
                     val newWidth = floor(width * scale).toInt()
                     val newHeight = floor(height * scale).toInt()
-                    Log.d("Renderer", "Create mipmap using CPU ${scale} ${newWidth} ${newHeight}")
+                    WgvLog.d(TAG, "Create mipmap using CPU: scale=$scale -> ${newWidth}x$newHeight")
 
                     currentPixels = withContext(Dispatchers.Default) {
                         ImageUtil.resize(currentPixels, textureWidth, textureHeight)
@@ -135,14 +149,21 @@ class Image private constructor(
             // No render mutex: Mipmap.create yields between upload chunks so queued frames get
             // the thread back. Safe since the image isn't reachable from any page yet.
             WebGpuRenderer.onDispatcher { device ->
+                WgvLog.i(
+                    TAG, "Uploading ${mipmapDataList.size} mipmap level(s) to GPU..."
+                )
                 try {
                     for (data in mipmapDataList) {
                         image.mipmaps.add(
                             Mipmap.create(data.pixels, data.w, data.h, data.scale, tilesize)
                         )
                     }
+                    WgvLog.i(
+                        TAG,
+                        "Image ${width}x$height ready on GPU (${image.mipmaps.size} level(s))"
+                    )
                 } catch (e: Exception) {
-                    Log.e("Renderer", "Error creating image", e)
+                    WgvLog.e(TAG, "Error creating image - cleaning up ${image.mipmaps.size} level(s)", e)
                     image.mipmaps.forEach { it.cleanup() }
                     image.mipmaps.clear()
                     throw e
@@ -153,12 +174,14 @@ class Image private constructor(
         }
 
         suspend operator fun invoke(width: Int, height: Int): Image {
+            WgvLog.i(TAG, "Creating drawable image ${width}x$height")
             return Image(width, height).apply {
                 WebGpuRenderer.withContext { _ ->
                     try {
                         mipmaps.add(Mipmap(width, height))
+                        WgvLog.i(TAG, "Drawable image ${width}x$height ready")
                     } catch (e: Exception) {
-                        Log.e("Renderer", "Error creating drawable image", e)
+                        WgvLog.e(TAG, "Error creating drawable image", e)
                         throw e
                     }
                 }
@@ -168,7 +191,7 @@ class Image private constructor(
 
     private var _buffer: GPUBuffer? = WebGpuRenderer.device.createBuffer(
         GPUBufferDescriptor(size = BUFFER_SIZE, usage = BufferUsage.CopyDst or BufferUsage.Uniform)
-    )
+    ).also { WgvLog.d(TAG, "Image uniform buffer allocated ($BUFFER_SIZE bytes)") }
 
     val buffer: GPUBuffer
         get() = _buffer ?: error("Image buffer accessed after cleanup")
@@ -176,6 +199,7 @@ class Image private constructor(
     val mipmaps: MutableList<Mipmap> = mutableListOf()
 
     internal fun cleanup() {
+        WgvLog.d(TAG, "Image cleanup: destroying ${mipmaps.size} mipmap level(s) + uniform buffer")
         mipmaps.forEach { it.cleanup() }
         mipmaps.clear()
         _buffer?.destroy()
@@ -204,7 +228,10 @@ class Image private constructor(
     )
 
     fun prepareForRender(dst: GPUTexture, x: Float, y: Float, scale: Float): MipMapForDraw? {
-        if (mipmaps.isEmpty()) return null
+        if (mipmaps.isEmpty()) {
+            WgvLog.v(TAG, "prepareForRender: no mipmaps, skipping")
+            return null
+        }
 
         var level = floor(log2(1 / scale)).toInt().coerceIn(0, mipmaps.size - 1)
 
@@ -234,6 +261,9 @@ class Image private constructor(
         val vy = round(-adjustedY * dst.height * mipmap.scale + mipmap.height / 2).toInt()
 
         val quad = mipmap.getQuad(vx, vy)
+        WgvLog.throttled(TAG, key = "pfr", intervalMs = 500L) {
+            "prepareForRender: level=$level/${mipmaps.size} scale=$scale quad=(${quad.x},${quad.y})"
+        }
 
         return MipMapForDraw(
             mipmap,
@@ -263,7 +293,10 @@ class Image private constructor(
     fun prepareTilesForRender(
         dst: GPUTexture, x: Float, y: Float, scale: Float
     ): List<TileForDraw> {
-        if (mipmaps.isEmpty()) return emptyList()
+        if (mipmaps.isEmpty()) {
+            WgvLog.v(TAG, "prepareTilesForRender: no mipmaps, skipping")
+            return emptyList()
+        }
 
         val level = floor(log2(1 / scale)).toInt().coerceIn(0, mipmaps.size - 1)
         val mipmap = mipmaps[level]
@@ -278,7 +311,7 @@ class Image private constructor(
         val halfW = dst.width * mipmap.scale / (2f * scale)
         val halfH = dst.height * mipmap.scale / (2f * scale)
 
-        return mipmap.tilesInRect(cx - halfW, cy - halfH, cx + halfW, cy + halfH).map { tile ->
+        val result = mipmap.tilesInRect(cx - halfW, cy - halfH, cx + halfW, cy + halfH).map { tile ->
             // Same reconstruction prepareForRender uses for quad.x/quad.y, evaluated at this
             // tile's own offset instead - the formula was already general, it just happened to
             // only ever be evaluated at one window's offset before.
@@ -291,5 +324,9 @@ class Image private constructor(
                 scale / mipmap.scale
             )
         }
+        WgvLog.throttled(TAG, key = "tiles", intervalMs = 500L) {
+            "prepareTilesForRender: level=$level, ${result.size} tile(s) in view"
+        }
+        return result
     }
 }

@@ -1,6 +1,5 @@
 package ca.mpreg.webgpuviewer.renderer
 
-import android.util.Log
 import android.view.Surface
 import androidx.webgpu.DeviceLostCallback
 import androidx.webgpu.DeviceLostException
@@ -25,6 +24,7 @@ import androidx.webgpu.UncapturedErrorCallback
 import androidx.webgpu.WebGpuRuntimeException
 import androidx.webgpu.helper.Util.windowFromSurface
 import androidx.webgpu.helper.initLibrary
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer.Companion.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +35,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+
+private const val TAG = "WGV.Render"
 
 class WebGpuRenderer {
     companion object {
@@ -77,6 +79,7 @@ class WebGpuRenderer {
         val estimatedFps: Float get() = if (lastFrameTimeNs > 0) 1_000_000_000f / lastFrameTimeNs else 0f
 
         fun resetProfiling() {
+            WgvLog.d(TAG, "resetProfiling()")
             frameCount = 0
             totalFrameTimeNs = 0
             minFrameTimeNs = Long.MAX_VALUE
@@ -99,19 +102,26 @@ class WebGpuRenderer {
 
         init {
             runBlocking {
+                WgvLog.i(TAG, "WebGPU bootstrap: initLibrary() + createInstance()...")
                 initLibrary()
 
                 instance = createInstance(GPUInstanceDescriptor())
+                WgvLog.i(TAG, "GPUInstance created")
 
                 adapter =
                     instance.requestAdapter(GPURequestAdapterOptions(featureLevel = FeatureLevel.Compatibility))
+                WgvLog.i(TAG, "GPUAdapter acquired (featureLevel=Compatibility)")
 
                 val requiredFeatures =
                     if (adapter.hasFeature(FeatureName.TimestampQuery)) {
                         intArrayOf(FeatureName.TimestampQuery)
                     } else {
+                        WgvLog.d(TAG, "TimestampQuery not supported by adapter")
                         intArrayOf()
                     }
+                WgvLog.i(
+                    TAG, "Requesting GPUDevice (requiredFeatures=${requiredFeatures.toList()})"
+                )
 
                 device = adapter.requestDevice(
                     GPUDeviceDescriptor(
@@ -122,6 +132,7 @@ class WebGpuRenderer {
                         requiredFeatures = requiredFeatures,
                     )
                 )
+                WgvLog.i(TAG, "GPUDevice ready - WebGPU initialised")
             }
         }
 
@@ -164,6 +175,10 @@ class WebGpuRenderer {
 
     @Synchronized
     fun init(scope: CoroutineScope, surface: Surface, width: Int, height: Int) {
+        WgvLog.i(
+            TAG,
+            "init: surface ${width}x$height, thread=${Thread.currentThread().name}, scope=$scope"
+        )
         this.scope = scope
         this.width = width
         this.height = height
@@ -189,6 +204,7 @@ class WebGpuRenderer {
                             TextureUsage.RenderAttachment
                         )
                     )
+                    WgvLog.i(TAG, "GPUSurface created + configured ${width}x$height (RGBA8Unorm)")
                 }
             }
         }
@@ -206,12 +222,16 @@ class WebGpuRenderer {
         val startTime = if (profilingEnabled) System.nanoTime() else 0L
 
         mutex.withLock {
-            val surface = surface ?: return
+            val surface = surface
+            if (surface == null) {
+                WgvLog.v(TAG, "render skipped: surface not initialised yet")
+                return
+            }
 
             val texture = try {
                 surface.getCurrentTexture().texture
             } catch (e: Exception) {
-                Log.w("WebGpuRenderer", "Failed to get current texture", e)
+                WgvLog.w(TAG, "Failed to get current texture - dropping frame", e)
                 return
             }
 
@@ -221,9 +241,10 @@ class WebGpuRenderer {
                 device.queue.submit(arrayOf(encoder.finish()))
                 surface.present()
             } catch (e: CancellationException) {
+                WgvLog.v(TAG, "Frame cancelled mid-render", e)
                 throw e
             } catch (e: Exception) {
-                Log.e("WebGpuRenderer", "Render error", e)
+                WgvLog.e(TAG, "Render error - frame dropped, continuing", e)
                 // Don't rethrow - allow the app to continue rendering next frame
             }
         }
@@ -231,8 +252,8 @@ class WebGpuRenderer {
         if (profilingEnabled) {
             val frameTime = System.nanoTime() - startTime
             recordFrameTime(frameTime)
-            Log.d(
-                "WebGpuRenderer", "Frame: %.2fms | Avg: %.2fms | FPS: %.1f".format(
+            WgvLog.d(
+                TAG, "Frame: %.2fms | Avg: %.2fms | FPS: %.1f".format(
                     frameTime / 1_000_000f, recentAvgFrameTimeMs, estimatedFps
                 )
             )
@@ -240,6 +261,9 @@ class WebGpuRenderer {
     }
 
     fun cleanup() {
+        WgvLog.i(
+            TAG, "cleanup: destroying surface, thread=${Thread.currentThread().name}"
+        )
         // Check if already on dispatcher thread to avoid deadlock
         val isOnDispatcherThread = Thread.currentThread().name == "WebGPU-Render-Thread"
 
@@ -247,6 +271,7 @@ class WebGpuRenderer {
             mutex.withLock {
                 surface?.close()
                 surface = null
+                WgvLog.i(TAG, "cleanup: surface closed")
             }
         }
 
@@ -266,6 +291,7 @@ class WebGpuRenderer {
 private val defaultUncapturedErrorCallback
     get(): UncapturedErrorCallback {
         return UncapturedErrorCallback { _, type, message ->
+            WgvLog.e(TAG, "Uncaptured WebGPU error: type=$type message=$message")
             throw WebGpuRuntimeException.create(type, message)
         }
     }
@@ -273,6 +299,7 @@ private val defaultUncapturedErrorCallback
 private val defaultDeviceLostCallback
     get(): DeviceLostCallback {
         return DeviceLostCallback { device, reason, message ->
+            WgvLog.e(TAG, "GPU device lost: reason=$reason message=$message (device=$device)")
             throw DeviceLostException(device, reason, message)
         }
     }

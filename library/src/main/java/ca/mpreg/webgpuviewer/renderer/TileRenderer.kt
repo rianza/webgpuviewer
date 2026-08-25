@@ -1,6 +1,5 @@
 package ca.mpreg.webgpuviewer.renderer
 
-import android.util.Log
 import androidx.webgpu.BlendFactor
 import androidx.webgpu.BlendOperation
 import androidx.webgpu.BufferBindingType
@@ -59,6 +58,7 @@ import ca.mpreg.webgpuviewer.renderer.TileRenderer.Companion.OFF_SCREEN_SCORE
 import ca.mpreg.webgpuviewer.renderer.TileRenderer.Companion.STENCIL_BUFFER_COUNT
 import ca.mpreg.webgpuviewer.renderer.TileRenderer.Companion.TILES_PER_BATCH_FALLBACK
 import ca.mpreg.webgpuviewer.renderer.TileRenderer.Companion.TILE_SIZE
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.viewer.ImagePage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -144,7 +144,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
          */
         private const val RETAIN_MARGIN = 2
 
-        private const val TAG = "TileRenderer"
+        private const val TAG = "WGV.Tiles"
 
         /**
          * Score threshold [nextRequest] uses to tell a genuinely on-screen tile request from one
@@ -175,6 +175,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     // batch sizing just falls back to [TILES_PER_BATCH_FALLBACK] forever.
     private val timestampQuerySet: GPUQuerySet? by lazy {
         if (!device.hasFeature(FeatureName.TimestampQuery)) return@lazy null
+        WgvLog.d(TAG, "Timestamp queries supported - GPU tile timing enabled")
         device.createQuerySet(GPUQuerySetDescriptor(type = QueryType.Timestamp, count = 16))
     }
 
@@ -256,6 +257,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
         val destroyed get() = page.destroyed
 
         fun destroyAll() {
+            WgvLog.d(TAG, "destroyAll: page=${Integer.toHexString(System.identityHashCode(page))} dropping ${tiles.size} tile(s)")
             tiles.values.forEach { it.destroy() }
             tiles.clear()
             pending.clear()
@@ -328,6 +330,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     }
 
     private fun buildBlitPipeline(depthStencil: GPUDepthStencilState?): GPURenderPipeline {
+        WgvLog.d(TAG, "buildBlitPipeline (stencil=${depthStencil != null})")
         val shaderModule = device.createShaderModule(
             GPUShaderModuleDescriptor(shaderSourceWGSL = GPUShaderSourceWGSL(BLIT_SHADER))
         )
@@ -404,6 +407,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
      */
     fun stencilViewFor(dst: GPUTexture): GPUTextureView {
         if (stencilWidth != dst.width || stencilHeight != dst.height) {
+            WgvLog.d(TAG, "stencilViewFor: (re)allocating $STENCIL_BUFFER_COUNT stencil buffer(s) ${dst.width}x${dst.height}")
             stencilWidth = dst.width
             stencilHeight = dst.height
             for (i in 0 until STENCIL_BUFFER_COUNT) {
@@ -434,6 +438,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
         while (it.hasNext()) {
             val st = it.next().value
             if (st.destroyed) {
+                WgvLog.d(TAG, "newFrame: page destroyed, freeing its tile cache")
                 st.destroyAll()
                 it.remove()
             }
@@ -757,7 +762,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             }
         }
         if (added) {
-            if (!alreadyPrewarming) Log.d(TAG, "Pre-warming next page tiles ${pageId(page)}")
+            if (!alreadyPrewarming) WgvLog.d(TAG, "Pre-warming next page tiles ${pageId(page)}")
             schedule()
         }
     }
@@ -869,6 +874,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             while (pages.size > RETAIN_MARGIN) {
                 val eldest = pages.entries.iterator()
                 val entry = eldest.next()
+                WgvLog.v(TAG, "Retain window: evicting page ${pageId(entry.key)}")
                 entry.value.destroyAll()
                 eldest.remove()
             }
@@ -878,6 +884,11 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             // Dawn keeps a destroyed texture alive until its command buffers retire, so
             // destroying now is safe. A changed centerYOffset at fixed scale means a placeholder
             // corrected its guessed height - invalidate the same way a scale change does.
+            WgvLog.throttled(TAG, key = "grid-reset", intervalMs = 500L) {
+                "Grid invalidated: scale ${st.scale} -> $pageScale, " +
+                    "centerYOffset ${st.centerYOffset} -> $centerYOffset " +
+                    "(${st.tiles.size} tile(s) dropped, page=${pageId(page)})"
+            }
             st.tiles.values.forEach { it.destroy() }
             st.tiles.clear()
             st.pending.clear()
@@ -955,6 +966,10 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
                 staleIt.remove()
             }
         }
+        WgvLog.throttled(TAG, key = "frame", intervalMs = 500L) {
+            "drawCore: page=${pageId(page)} drew wanted=${desired.size} " +
+                "cached=${st.tiles.size} pending=${st.pending.size} frame=$frame"
+        }
 
         if (st.pending.isNotEmpty()) schedule()
     }
@@ -975,6 +990,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     private fun schedule() {
         if (workerActive) return
         workerActive = true
+        WgvLog.d(TAG, "Tile generation worker started")
         workerScope.launch {
             try {
                 while (true) {
@@ -989,15 +1005,20 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            Log.e(TAG, "Tile render failed", e)
+                            WgvLog.e(TAG, "Tile render failed", e)
                         }
                     }
                     if (generated == 0) break
+                    WgvLog.throttled(TAG, key = "batch", intervalMs = 500L) {
+                        "Generated batch of $generated tile(s) (batchSize=$batchSize, " +
+                            "avgTileGpuNs=%.0f, cached=%d)".format(avgTileGpuNs, pages.values.sumOf { it.tiles.size })
+                    }
                     invalidate()
                     if (timestampsSupported) measurements.joinAll() else delay(5.milliseconds)
                 }
             } finally {
                 workerActive = false
+                WgvLog.d(TAG, "Tile generation worker idle - queue drained")
             }
         }
     }
@@ -1171,6 +1192,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
         if (st.pending.isEmpty()) return true
 
         val toGenerate = st.pending.toList()
+        WgvLog.d(TAG, "renderFullyTiled: force-generating ${toGenerate.size} missing tile(s)")
         st.pending.clear()
         toGenerate.forEach { tkey -> generateTileNow(st, (tkey shr 32).toInt(), tkey.toInt()) }
 
@@ -1212,6 +1234,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
     ): Job? {
         val key = key(tx, ty)
         if (st.tiles.containsKey(key)) return null
+        WgvLog.v(TAG, "generateTile: page=${pageId(st.page)} tile=(${(key shr 32).toInt()},${key.toInt()})")
         evict()
 
         val queries = timestampQuerySet
@@ -1418,6 +1441,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
             total--
             i++
         }
+        WgvLog.d(TAG, "evict: LRU cap hit (maxTiles=$maxTiles), dropped $i tile(s), $total remain")
     }
 
     /**
@@ -1426,6 +1450,7 @@ internal class TileRenderer(private val invalidate: () -> Unit) {
      * rendering simply refills the cache.
      */
     fun cleanup() {
+        WgvLog.d(TAG, "cleanup: freeing ${pages.size} page grid(s)")
         workerScope.launch {
             pages.values.forEach { it.destroyAll() }
             pages.clear()
