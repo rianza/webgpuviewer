@@ -21,6 +21,7 @@ import androidx.webgpu.GPURenderPassEncoder
 import androidx.webgpu.GPUTexture
 import androidx.webgpu.LoadOp
 import androidx.webgpu.StoreOp
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.renderer.TileRenderer
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer.Companion.dispatcher
@@ -34,6 +35,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val TAG = "WGV.Viewer"
 
 open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boolean = false) {
     val renderer = WebGpuRenderer()
@@ -55,6 +58,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     var cutoutTopPx: Float = 0f
         set(value) {
             if (field != value) {
+                WgvLog.d(TAG, "cutoutTopPx: $field -> $value (re-homing current page)")
                 field = value
                 // Move current page to new home position when cutout changes
                 getPage(0)?.home()
@@ -93,6 +97,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
             field = v
 
             if (pageDelta != 0) {
+                WgvLog.i(TAG, "Page turn: delta=$pageDelta (pageOffset=$value, reversed=$isReversed)")
                 onPageChange?.invoke(if (isReversed) -pageDelta else pageDelta)
             }
 
@@ -111,6 +116,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     }
 
     fun animatePageTurn(direction: Int) {
+        WgvLog.d(TAG, "animatePageTurn(direction=$direction)")
         animationJob?.cancel()
         animationJob = scope?.launch {
             setPageOffsetDirect(direction.toFloat())
@@ -154,15 +160,20 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
      * [onPageChange] are what decide what a step actually means.
      */
     fun getPage(index: Int): ImagePage? {
-        return fetchPage?.invoke(index)?.also { page ->
-            if (page.parent !== this) page.parent = this
-            if (page.scope !== this.scope) page.scope = this.scope
-            if (page.onInvalidate !== invalidateCallback) page.onInvalidate = invalidateCallback
+        val page = fetchPage?.invoke(index)
+        if (page == null) {
+            WgvLog.v(TAG, "getPage($index): null (no fetchPage or no page)")
+        }
+        return page?.also { p ->
+            if (p.parent !== this) p.parent = this
+            if (p.scope !== this.scope) p.scope = this.scope
+            if (p.onInvalidate !== invalidateCallback) p.onInvalidate = invalidateCallback
         }
     }
 
     @Synchronized
     fun init(scope: CoroutineScope, surface: Surface, width: Int, height: Int) {
+        WgvLog.i(TAG, "ImageViewerState.init: ${width}x$height, vertical=$isVertical, reversed=$isReversed")
         this.renderer.init(scope, surface, width, height)
         this.scope = scope
 
@@ -188,7 +199,10 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     suspend fun collect() {
         renderFlow.collectLatest {
             // Capture render state on main thread before any thread switching
-            val snapshot = captureRenderState() ?: return@collectLatest
+            val snapshot = captureRenderState() ?: run {
+                WgvLog.v(TAG, "collect: no render state captured, skipping frame")
+                return@collectLatest
+            }
             // Now render on GPU thread with captured state
             withContext(dispatcher) {
                 renderer.render { encoder, texture ->
@@ -211,6 +225,10 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
         // Only used to pre-warm the transition cache while at rest (see renderSnapshot), so
         // there's no need to look it up while a turn is already in progress.
         val nextPage = if (offset == 0f) getPage(1) else null
+        WgvLog.throttled(TAG, key = "capture", intervalMs = 500L) {
+            "captureRenderState: page=${currentPage::class.simpleName} offset=$offset " +
+                "adjacent=${adjacentPage != null} transition=${transition::class.simpleName}"
+        }
         return RenderSnapshot(
             currentPage, adjacentPage, nextPage, offset, transition, firstPos, currentPos
         )
@@ -275,6 +293,9 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
         val page = s.currentPage
 
         if (s.adjacentPage != null && s.offset != 0f) {
+            WgvLog.throttled(TAG, key = "transition", intervalMs = 500L) {
+                "renderSnapshot: transition=${s.transition::class.simpleName} offset=${s.offset}"
+            }
             s.transition.render(
                 page, s.adjacentPage, encoder, texture, s.offset, s.firstPos, s.currentPos, tiles
             )
@@ -299,6 +320,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
 
     @Synchronized
     fun post(fn: suspend () -> Unit) {
+        WgvLog.v(TAG, "post(fn) - scope active=${scope?.isActive == true}")
         val activeScope = scope
         if (activeScope?.isActive == true) {
             activeScope.launch(dispatcher) {
@@ -310,6 +332,7 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     }
 
     fun cleanup() {
+        WgvLog.i(TAG, "ImageViewerState.cleanup")
         animationJob?.cancel()
         tiles.cleanup()
         renderer.cleanup()

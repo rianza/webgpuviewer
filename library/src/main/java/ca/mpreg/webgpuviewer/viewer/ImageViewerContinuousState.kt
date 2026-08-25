@@ -7,11 +7,14 @@ import androidx.webgpu.GPUCommandEncoder
 import androidx.webgpu.GPUTexture
 import ca.mpreg.webgpuviewer.draw.Draw
 import ca.mpreg.webgpuviewer.draw.clear
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.renderer.RenderPage
 import ca.mpreg.webgpuviewer.renderer.TileRenderer.Companion.TILE_SIZE
 import ca.mpreg.webgpuviewer.renderer.WebGpuRenderer
 import ca.mpreg.webgpuviewer.renderer.solveImagePlacement
 import kotlinx.coroutines.launch
+
+private const val TAG = "WGV.Continuous"
 
 class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
     companion object {
@@ -91,6 +94,7 @@ class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
         synchronized(scrollLock) {
             getPage(0) ?: return
 
+            val before = scrollY
             scrollY += deltaPixels
 
             // Backwards, while the position sits above the top of the current page.
@@ -129,10 +133,14 @@ class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
                 val page = getPage(0) ?: return
                 scrollY = scrollY.coerceAtMost(getPageHeight(page))
             }
+            WgvLog.throttled(TAG, key = "scrollBy", intervalMs = 250L) {
+                "scrollBy: $before -> $scrollY (delta=$deltaPixels, scale=$scale)"
+            }
         }
     }
 
     fun animateScroll(deltaPixels: Float) {
+        WgvLog.d(TAG, "animateScroll(deltaPixels=$deltaPixels)")
         animationJob?.cancel()
         animationJob = scope?.launch {
             var lastValue = 0f
@@ -238,6 +246,11 @@ class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
             i++
         }
 
+        WgvLog.throttled(TAG, key = "capture", intervalMs = 500L) {
+            "captureRenderState: ${pages.size} visible page(s), scale=$scale, " +
+                "cameraDocY=$cameraDocY, scrollY=$scrollY, " +
+                "suppressGen=${isScaleAnimating || isFlinging}"
+        }
         ContinuousRenderSnapshot(pages, scale, offsetX, cameraDocY, isScaleAnimating || isFlinging)
     }
 
@@ -248,7 +261,13 @@ class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
     ) {
         val s = snapshot as ContinuousRenderSnapshot
         tiles.newFrame()
-        if (s.pages.isEmpty()) return
+        if (s.pages.isEmpty()) {
+            WgvLog.v(TAG, "renderSnapshot: no visible pages")
+            return
+        }
+        WgvLog.throttled(TAG, key = "renderSnapshot", intervalMs = 500L) {
+            "renderSnapshot: ${s.pages.size} page(s), scale=${s.scale}"
+        }
 
         // Images pages batch into one shared pass (they never overlap vertically, so one clear
         // plus one draw per image writes each pixel once). A Render page (ImagePage.Render, e.g.

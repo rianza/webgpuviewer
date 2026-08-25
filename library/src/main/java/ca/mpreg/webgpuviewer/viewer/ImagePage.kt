@@ -2,7 +2,6 @@ package ca.mpreg.webgpuviewer.viewer
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
@@ -27,6 +26,7 @@ import ca.mpreg.webgpuviewer.draw.circle
 import ca.mpreg.webgpuviewer.draw.clear
 import ca.mpreg.webgpuviewer.draw.rect
 import ca.mpreg.webgpuviewer.draw.text
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.orZero
 import ca.mpreg.webgpuviewer.renderer.Image
 import ca.mpreg.webgpuviewer.renderer.RenderPage
@@ -43,6 +43,8 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
+
+private const val TAG = "WGV.Page"
 
 /**
  * A page in the viewer, with shared transform (x, y, scale), pan/zoom-to-fit bounds, and
@@ -291,10 +293,14 @@ open class ImagePage {
             suspend operator fun invoke(
                 pixels: ByteBuffer, width: Int, height: Int, createMipMaps: Boolean = true
             ): Images {
+                WgvLog.i(TAG, "Images.fromPixels ${width}x$height (mipmaps=$createMipMaps)")
                 return Images(Image(pixels, width, height, createMipMaps))
             }
 
             suspend operator fun invoke(bitmap: Bitmap, createMipMaps: Boolean = true): Images {
+                WgvLog.d(
+                    TAG, "Images.fromBitmap ${bitmap.width}x${bitmap.height} (${bitmap.byteCount} bytes)"
+                )
                 val buf = ByteBuffer.allocateDirect(bitmap.byteCount)
                 bitmap.copyPixelsToBuffer(buf)
                 return Images(buf, bitmap.width, bitmap.height, createMipMaps)
@@ -395,6 +401,7 @@ open class ImagePage {
             get() = currentFrameImage ?: images.firstOrNull()
 
         fun startAnimationLoop(frames: List<Pair<Image, Int>>, invalidate: () -> Unit) {
+            WgvLog.d(TAG, "startAnimationLoop: ${frames.size} frame(s), frameDurations=${frames.map { it.second }}")
             animationLoop?.cancel()
             this.frames = frames
             currentFrameImage = frames.firstOrNull()?.first
@@ -508,6 +515,10 @@ open class ImagePage {
                 // renderPage then only shades what's left uncovered instead of the whole
                 // viewport, since tiles.draw() already produced the right pixel wherever it drew.
                 val covered = tiles.isFullyCovered(this, dst, 0f, 0f, 1f)
+                WgvLog.throttled(TAG, key = "drawLive", intervalMs = 500L) {
+                    "Images.drawLive: page=${Integer.toHexString(System.identityHashCode(this))} " +
+                        "covered=$covered"
+                }
                 renderBackground(pass, dst, 0f, 0f, 1f)
                 tiles.draw(pass, this, dst, 0f, 0f, 1f)
                 if (!covered) {
@@ -527,6 +538,7 @@ open class ImagePage {
         override fun renderCacheSeed(
             encoder: GPUCommandEncoder, tex: GPUTexture, tiles: TileRenderer
         ) {
+            WgvLog.v(TAG, "Images.renderCacheSeed: tex ${tex.width}x${tex.height}, animated=$isAnimated, highQuality=$highQuality")
             if (isAnimated) {
                 val pass = beginCachePass(encoder, tex)
                 try {
@@ -624,6 +636,9 @@ open class ImagePage {
             linear: Boolean = true,
             masked: Boolean = true
         ) {
+            WgvLog.throttled(TAG, key = "renderPage", intervalMs = 500L) {
+                "Images.renderPage: ${images.size} image(s), scale=$scale, linear=$linear, masked=$masked"
+            }
             val variant = RenderPage.variantFor(linear, masked)
             forEachPlacedImage(dst, x, y, scale) { image, rect, placeX, placeY, placeScale ->
                 if (!linear || !masked) {
@@ -759,6 +774,7 @@ open class ImagePage {
         @Synchronized
         override fun cleanup() {
             if (destroyed) return
+            WgvLog.d(TAG, "Images.cleanup: page=${Integer.toHexString(System.identityHashCode(this))}, ${images.size} image(s), ownsImages=$ownsImages")
             super.cleanup()
 
             animationLoop?.cancel()
@@ -793,7 +809,7 @@ open class ImagePage {
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("ImagePage", "Cleanup error", e)
+                        WgvLog.e(TAG, "Cleanup error while freeing ${imagesToClean.size} image(s)", e)
                     }
                 }
             }
@@ -854,6 +870,7 @@ open class ImagePage {
     open fun renderWith(
         encoder: GPUCommandEncoder, x: Float, y: Float, scale: Float, dst: GPUTexture
     ) {
+        WgvLog.v(TAG, "ImagePage.renderWith (base): clear ${dst.width}x${dst.height}")
         Draw.clear(encoder, dst, 0)
     }
 
@@ -1185,6 +1202,10 @@ open class ImagePage {
         targetY: Float = homeY,
         targetScale: Float = scale,
     ) {
+        WgvLog.d(
+            TAG,
+            "animateTo: (${x},$y@$scale) -> ($targetX,$targetY@$targetScale) origin=$origin"
+        )
         animationJob?.cancel()
 
         val startScale = scale
@@ -1254,6 +1275,7 @@ open class ImagePage {
     @Synchronized
     open fun cleanup() {
         if (destroyed) return
+        WgvLog.d(TAG, "ImagePage.cleanup: ${this::class.simpleName}")
         destroyed = true
 
         animationJob?.cancel()

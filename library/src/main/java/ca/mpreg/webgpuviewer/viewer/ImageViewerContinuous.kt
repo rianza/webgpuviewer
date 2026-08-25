@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.util.fastCoerceIn
 import ca.mpreg.webgpuviewer.NormalMotionDurationScale
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.waitForCleanUp
 import ca.mpreg.webgpuviewer.waitForDown
 import kotlinx.coroutines.delay
@@ -40,6 +41,8 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.time.Duration.Companion.milliseconds
+
+private const val TAG = "WGV.Gesture"
 
 @Composable
 fun ImageViewerContinuous(
@@ -79,6 +82,7 @@ fun ImageViewerContinuous(
                     val longPressJob = scope.launch {
                         delay(viewConfiguration.longPressTimeoutMillis.milliseconds)
                         longPressed = true
+                        WgvLog.d(TAG, "Gesture: long press (continuous)")
                         state.onLongTap?.invoke(
                             Offset(
                                 firstDown.position.x / state.width,
@@ -93,6 +97,7 @@ fun ImageViewerContinuous(
                         val secondDown = waitForDown(doubleTapTimeout)
                         if (secondDown == null) {
                             // Single tap
+                            WgvLog.d(TAG, "Gesture: single tap (continuous)")
                             if (!isScaleAnimating && !wasFlinging) {
                                 state.onTap?.invoke(
                                     Offset(
@@ -106,6 +111,7 @@ fun ImageViewerContinuous(
 
                         if (waitForCleanUp(secondDown.id, doubleTapTimeout, touchSlop) != null) {
                             // Double tap: toggle zoom
+                            WgvLog.d(TAG, "Gesture: double tap zoom toggle (continuous, scale=${state.scale})")
                             if (state.scale > minScale + 0.1f) {
                                 // Zoom out: animate offsetX to 0, anchor Y to tap point
                                 val py = secondDown.position.y / state.height - 0.5f
@@ -165,6 +171,7 @@ fun ImageViewerContinuous(
                             }
                         } else {
                             // Double tap drag: zoom by dragging
+                            WgvLog.d(TAG, "Gesture: double-tap drag zoom (continuous)")
                             val velocityTracker = VelocityTracker()
                             velocityTracker.addPointerInputChange(secondDown)
                             val dragPointerId = secondDown.id
@@ -215,6 +222,7 @@ fun ImageViewerContinuous(
                             val velocity = velocityTracker.calculateVelocity()
                             if (willFlingZoom) {
                                 // Fling zoom
+                                WgvLog.d(TAG, "Gesture: fling zoom (double-tap drag)")
                                 state.animationJob = scope.launch(NormalMotionDurationScale) {
                                     try {
                                         Animatable(0f).animateDecay(
@@ -292,6 +300,7 @@ fun ImageViewerContinuous(
 
                                     if (event.changes.size > 1 && event.changes.all { it.pressed }) {
                                         if (single) {
+                                            WgvLog.d(TAG, "Gesture: pinch zoom started (continuous)")
                                             longPressJob.cancel()
                                             velocityTracker.resetTracking()
                                         }
@@ -365,6 +374,7 @@ fun ImageViewerContinuous(
 
                         if (willFlingZoom) {
                             // Fling zoom
+                            WgvLog.d(TAG, "Gesture: fling zoom (pinch)")
                             val cx = lastCentroid.x - 0.5f
                             val cy = lastCentroid.y - 0.5f
                             val startScale = state.scale
@@ -498,11 +508,13 @@ fun ImageViewerContinuous(
             }, isOpaque = false
     ) {
         onSurface { surface, width, height ->
+            WgvLog.i(TAG, "Surface created (continuous): ${width}x$height")
             try {
                 state.init(scope, surface, width, height)
                 state.invalidate()
                 state.collect()
             } finally {
+                WgvLog.i(TAG, "Surface destroyed (continuous) - cleaning up viewer state")
                 state.cleanup()
             }
         }

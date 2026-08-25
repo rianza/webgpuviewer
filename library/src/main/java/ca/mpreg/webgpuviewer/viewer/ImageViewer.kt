@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastForEach
 import ca.mpreg.webgpuviewer.NormalMotionDurationScale
+import ca.mpreg.webgpuviewer.log.WgvLog
 import ca.mpreg.webgpuviewer.orZero
 import ca.mpreg.webgpuviewer.waitForCleanUp
 import ca.mpreg.webgpuviewer.waitForDown
@@ -40,6 +41,8 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.time.Duration.Companion.milliseconds
+
+private const val TAG = "WGV.Gesture"
 
 @Composable
 fun ImageViewer(
@@ -105,6 +108,7 @@ fun ImageViewer(
                         scope.launch {
                             delay(viewConfiguration.longPressTimeoutMillis.milliseconds)
                             longPressed = true
+                            WgvLog.d(TAG, "Gesture: long press")
                             state.onLongTap?.invoke(
                                 Offset(
                                     firstDown.position.x / state.width,
@@ -118,6 +122,7 @@ fun ImageViewer(
                         longPressJob?.cancel()
                         val secondDown = waitForDown(doubleTapTimeout)
                         if (secondDown == null) {
+                            WgvLog.d(TAG, "Gesture: single tap")
                             pageTurnJob?.cancel()
                             if (state.pageOffset != 0f) {
                                 state.animationJob = scope.launch {
@@ -146,6 +151,7 @@ fun ImageViewer(
 
                         if (waitForCleanUp(secondDown.id, doubleTapTimeout, touchSlop) != null) {
                             // double tap — let any in-progress page turn finish committing first
+                            WgvLog.d(TAG, "Gesture: double tap (zoom toggle)")
                             val tapX = secondDown.position.x / state.width
                             val tapY = secondDown.position.y / state.height
                             scope.launch {
@@ -178,6 +184,7 @@ fun ImageViewer(
                             state.animationJob?.cancel()
 
                             page.isScaleAnimating = true
+                            WgvLog.d(TAG, "Gesture: double-tap drag zoom")
                             var willFlingZoom = false
                             try {
                                 while (true) {
@@ -315,6 +322,7 @@ fun ImageViewer(
                                     var pointerCountChanged = false
                                     if (twoFingers) {
                                         if (single && !pageTurning) {
+                                            WgvLog.d(TAG, "Gesture: pinch zoom started")
                                             longPressJob?.cancel()
                                             velocityTracker.resetTracking()
                                             acc = Offset.Zero
@@ -389,6 +397,7 @@ fun ImageViewer(
                                                     abs(acc.x) > abs(acc.y)
                                                 }
                                                 if (overflow != 0f && isBiased) {
+                                                    WgvLog.d(TAG, "Gesture: pan turned into page turn")
                                                     page.animateTo(Offset(0.5f, 0.5f))
                                                     pageTurning = true
                                                     state.firstPos = firstDown.position
@@ -462,6 +471,7 @@ fun ImageViewer(
                                 ) == page.x || page.y.fastCoerceIn(minY, maxY) == page.y)
                             ) {
                                 // fling pan
+                                WgvLog.d(TAG, "Gesture: fling pan (velocity=$velocity)")
                                 page.animationJob = scope.launch(NormalMotionDurationScale) {
                                     page.isFlinging = true
                                     try {
@@ -492,11 +502,13 @@ fun ImageViewer(
             }, isOpaque = false
     ) {
         onSurface { surface, width, height ->
+            WgvLog.i(TAG, "Surface created: ${width}x$height")
             try {
                 state.init(scope, surface, width, height)
                 state.invalidate()
                 state.collect()
             } finally {
+                WgvLog.i(TAG, "Surface destroyed - cleaning up viewer state")
                 state.cleanup()
             }
         }
