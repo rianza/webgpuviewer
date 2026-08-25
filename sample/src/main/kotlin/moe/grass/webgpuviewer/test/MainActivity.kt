@@ -1,6 +1,7 @@
 package ca.mpreg.webgpuviewer.test
 
 import android.os.Bundle
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import ca.mpreg.imagedecoder.ImageDecoder
 import ca.mpreg.webgpuviewer.renderer.Image
@@ -12,11 +13,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val TAG = "WGV.Sample"
+
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: MainActivityBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "onCreate")
 
         binding = MainActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -30,6 +34,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         CoroutineScope(Dispatchers.Default).launch {
+            Log.d(TAG, "decoding page1 (ref.png)...")
             val page1 = withContext(Dispatchers.Default) {
                 val stream = assets.open("ref.png")
                 val dec = ImageDecoder.new(stream)
@@ -44,6 +49,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            Log.d(TAG, "page1 ready: ${page1.width}x${page1.height}")
 
             val page2 = withContext(Dispatchers.Default) {
                 val stream = assets.open("ref2.png")
@@ -98,6 +104,7 @@ class MainActivity : AppCompatActivity() {
                 havePrev = true
 
                 fetchPage = { index ->
+                    Log.d(TAG, "fetchPage($index)")
                     if(index == -1) {
                         page4
                     } else if (index == 0) {
@@ -110,27 +117,16 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 post {
+                    Log.d(TAG, "post: first render requested")
                     render()
                 }
             }
+            Log.i(TAG, "sample state configured (4 pages)")
         }
+    }
 
-//        CoroutineScope(Dispatchers.Default).launch {
-//            var frame = 0
-//            while(true) {
-//                val elapsed = measureTime {
-//                    withContext(Dispatchers.Main) {
-//                        binding.composeView1.renderer.let { r ->
-//                            r.images.clear()
-//                            r.images.add(frames[frame])
-//                            r.render()
-//                        }
-//                    }
-//                }
-//
-//                delay((durations[frame] - elapsed.inWholeMilliseconds).coerceAtLeast(0).milliseconds)
-//                frame = (frame + 1) % frames.size
-//            }
-//        }
+    override fun onDestroy() {
+        Log.i(TAG, "onDestroy")
+        super.onDestroy()
     }
 }

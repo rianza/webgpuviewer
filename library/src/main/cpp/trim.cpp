@@ -13,6 +13,13 @@
 #include <thread>
 #include <vector>
 
+#include <android/log.h>
+
+#define WGV_LOG_TAG "WGV.TrimCpp"
+#define WGV_LOGI(...) __android_log_print(ANDROID_LOG_INFO, WGV_LOG_TAG, __VA_ARGS__)
+#define WGV_LOGW(...) __android_log_print(ANDROID_LOG_WARN, WGV_LOG_TAG, __VA_ARGS__)
+#define WGV_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, WGV_LOG_TAG, __VA_ARGS__)
+
 namespace {
 
 constexpr int kChannels = 4;
@@ -276,28 +283,36 @@ Java_ca_mpreg_webgpuviewer_TrimNative_findTrim(JNIEnv *env, jobject thiz,
                                                jint height, jfloatArray colors,
                                                jfloat threshold,
                                                jintArray outBounds) {
+  WGV_LOGI("findTrim: %dx%d, threshold=%.4f", width, height, threshold);
   if (width <= 0 || height <= 0) {
+    WGV_LOGW("findTrim: rejected, bad dimensions %dx%d", width, height);
     return JNI_FALSE;
   }
 
   const uint8_t *pixels =
       static_cast<const uint8_t *>(env->GetDirectBufferAddress(pixelBuffer));
   if (pixels == nullptr) {
+    WGV_LOGW("findTrim: rejected, pixelBuffer is not a direct buffer");
     return JNI_FALSE;
   }
   const jlong capacity = env->GetDirectBufferCapacity(pixelBuffer);
   if (capacity < static_cast<jlong>(width) * height * kChannels) {
+    WGV_LOGW("findTrim: rejected, capacity %lld < needed %lld",
+             (long long)capacity, (long long)width * height * kChannels);
     return JNI_FALSE;
   }
 
   const jsize colorFloats = env->GetArrayLength(colors);
   const int colorCount = colorFloats / 3;
   if (colorCount <= 0 || env->GetArrayLength(outBounds) < colorCount * 4) {
+    WGV_LOGW("findTrim: rejected, colorFloats=%d outBoundsLen=%d",
+             colorFloats, env->GetArrayLength(outBounds));
     return JNI_FALSE;
   }
 
   jfloat *colorData = env->GetFloatArrayElements(colors, nullptr);
   if (colorData == nullptr) {
+    WGV_LOGE("findTrim: GetFloatArrayElements returned null");
     return JNI_FALSE;
   }
 
@@ -366,9 +381,12 @@ Java_ca_mpreg_webgpuviewer_TrimNative_findTrim(JNIEnv *env, jobject thiz,
     out[i * 4 + 1] = merged[i].minY;
     out[i * 4 + 2] = merged[i].maxX;
     out[i * 4 + 3] = merged[i].maxY;
+    WGV_LOGI("findTrim: color[%d] bounds=[%d,%d,%d,%d]", i, merged[i].minX,
+             merged[i].minY, merged[i].maxX, merged[i].maxY);
   }
   env->SetIntArrayRegion(outBounds, 0, colorCount * 4, out.data());
 
+  WGV_LOGI("findTrim: OK for %d color(s)", colorCount);
   return JNI_TRUE;
 }
 
@@ -379,19 +397,23 @@ Java_ca_mpreg_webgpuviewer_TrimNative_detectBackground(JNIEnv *env,
                                                        jint width, jint height,
                                                        jfloat threshold) {
   (void)threshold;
+  WGV_LOGI("detectBackground: %dx%d", width, height);
   const jint kWhite = static_cast<jint>(0xFFFFFFFFu);
 
   if (width <= 0 || height <= 0) {
+    WGV_LOGW("detectBackground: bad dimensions, defaulting to white");
     return kWhite;
   }
 
   const uint8_t *pixels =
       static_cast<const uint8_t *>(env->GetDirectBufferAddress(pixelBuffer));
   if (pixels == nullptr) {
+    WGV_LOGW("detectBackground: pixelBuffer is not a direct buffer, defaulting to white");
     return kWhite;
   }
   const jlong capacity = env->GetDirectBufferCapacity(pixelBuffer);
   if (capacity < static_cast<jlong>(width) * height * kChannels) {
+    WGV_LOGW("detectBackground: capacity too small, defaulting to white");
     return kWhite;
   }
 
@@ -425,6 +447,8 @@ Java_ca_mpreg_webgpuviewer_TrimNative_detectBackground(JNIEnv *env,
     }
   }
 
+  WGV_LOGI("detectBackground: solid edges=%d (white=%d, nonWhite=%d)",
+           solidCount, whiteCount, nonWhiteCount);
   if (nonWhiteCount > 0) {
     const double inv = 1.0 / static_cast<double>(nonWhiteCount);
     const int r = std::clamp(
@@ -437,12 +461,17 @@ Java_ca_mpreg_webgpuviewer_TrimNative_detectBackground(JNIEnv *env,
         static_cast<int>(linearToSrgb(linearSum[2] * inv) * 255.0 + 0.5), 0,
         255);
     const int rgb = (r << 16) | (g << 8) | b;
-    return static_cast<jint>(0xFF000000u | static_cast<uint32_t>(rgb));
+    const jint result = static_cast<jint>(0xFF000000u | static_cast<uint32_t>(rgb));
+    WGV_LOGI("detectBackground: result #%08X (mean of %d non-white edge(s))",
+             static_cast<uint32_t>(result), nonWhiteCount);
+    return result;
   }
 
   if (whiteCount > 0) {
+    WGV_LOGI("detectBackground: result #FFFFFFFF (white edge)");
     return kWhite;
   }
 
+  WGV_LOGI("detectBackground: result #FFFFFFFF (no solid edge found)");
   return kWhite;
 }

@@ -1,6 +1,12 @@
 #include <algorithm>
 #include <cmath>
 #include <jni.h>
+#include <chrono>
+#include <android/log.h>
+
+#define WGV_LOG_TAG "WGV.ResizeCpp"
+#define WGV_LOGI(...) __android_log_print(ANDROID_LOG_INFO, WGV_LOG_TAG, __VA_ARGS__)
+#define WGV_LOGW(...) __android_log_print(ANDROID_LOG_WARN, WGV_LOG_TAG, __VA_ARGS__)
 
 #ifdef __ARM_NEON
 #include <arm_neon.h>
@@ -48,17 +54,26 @@ extern "C" JNIEXPORT void JNICALL
 Java_ca_mpreg_webgpuviewer_ImageUtil_resizeLinearAreaNative(
     JNIEnv *env, jobject thiz, jobject src_buffer, jobject dst_buffer,
     jint srcWidth, jint srcHeight) {
+  const auto wgvStart = std::chrono::steady_clock::now();
   initLUTs();
 
   uint32_t *src = (uint32_t *)env->GetDirectBufferAddress(src_buffer);
   uint32_t *dst = (uint32_t *)env->GetDirectBufferAddress(dst_buffer);
-  if (!src || !dst)
+  if (!src || !dst) {
+    WGV_LOGW("resize: src or dst buffer is not direct - nothing done");
     return;
+  }
 
   int dstWidth = srcWidth / 2;
   int dstHeight = srcHeight / 2;
-  if (dstWidth <= 0 || dstHeight <= 0)
+  if (dstWidth <= 0 || dstHeight <= 0) {
+    WGV_LOGW("resize: degenerate destination %dx%d - nothing done",
+             dstWidth, dstHeight);
     return;
+  }
+
+  WGV_LOGI("resize: %dx%d -> %dx%d (area filter)", srcWidth, srcHeight,
+           dstWidth, dstHeight);
 
   double scaleX = (double)srcWidth / dstWidth;
   double scaleY = (double)srcHeight / dstHeight;
@@ -267,4 +282,10 @@ Java_ca_mpreg_webgpuviewer_ImageUtil_resizeLinearAreaNative(
           (finalA << 24) | (finalR << 16) | (finalG << 8) | finalB;
     }
   }
+
+  const auto wgvElapsedMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - wgvStart)
+          .count();
+  WGV_LOGI("resize: done in %lld ms", (long long)wgvElapsedMs);
 }
