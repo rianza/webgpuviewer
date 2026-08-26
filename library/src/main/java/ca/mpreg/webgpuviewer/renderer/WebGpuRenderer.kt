@@ -241,7 +241,7 @@ class WebGpuRenderer {
                 device.queue.submit(arrayOf(encoder.finish()))
                 surface.present()
             } catch (e: CancellationException) {
-                WgvLog.v(TAG, "Frame cancelled mid-render", e)
+                WgvLog.v(TAG, "Frame cancelled mid-render: ${e.message}")
                 throw e
             } catch (e: Exception) {
                 WgvLog.e(TAG, "Render error - frame dropped, continuing", e)
